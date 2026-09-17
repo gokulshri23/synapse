@@ -1,0 +1,85 @@
+@import 'tailwindcss';
+
+:root {
+  --canvas: #F4F1EA;
+  --card: #FCFAF6;
+  --card-alt: #F8F6F0;
+  --border: #E8E3D8;
+  --border-dashed: #D5CFC3;
+  --ink: #1C1917;
+  --muted: #78716C;
+  --amber: #D97706;
+  --terracotta: #B45309;
+  --ok: #2ee6a8;
+  --bad: #ff4d6a;
+  --radius-card: 20px;
+  --radius-input: 14px;
+}
+
+.dark {
+  --canvas: #0D0C0B;
+  --card: #161412;
+  --card-alt: #1F1C18;
+  --border: #2C2822;
+  --border-dashed: #3E3830;
+  --ink: #F5F2EB;
+  --muted: #A39E96;
+  --amber: #F59E0B;
+  --terracotta: #D97706;
+  --ok: #34D399;
+  --bad: #F87171;
+}
+
+@theme inline {
+  --color-canvas: var(--canvas);
+  --color-card: var(--card);
+  --color-card-alt: var(--card-alt);
+  --color-border: var(--border);
+  --color-border-dashed: var(--border-dashed);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-amber: var(--amber);
+  --color-terracotta: var(--terracotta);
+  --color-ok: var(--ok);
+  --color-bad: var(--bad);
+  --radius-card: var(--radius-card);
+  --radius-input: var(--radius-input);
+}
+
+body {
+  background: var(--canvas);
+  color: var(--ink);
+  font-family: system-ui, -apple-system, sans-serif;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: Georgia, 'Times New Roman', serif;
+  color: var(--ink);
+  font-weight: 700;
+}
+
+input, select, textarea {
+  background: var(--card-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-input);
+  color: var(--ink);
+  padding: 0.625rem 0.875rem;
+  transition: border-color 0.2s, box-shadow 0.2s, background-color 0.2s;
+}
+
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: var(--amber);
+  box-shadow: 0 0 0 3px rgba(217, 119, 6, 0.18);
+}
+
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes slideUp { from { transform: translateY(16px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+@keyframes slideDown { from { transform: translateY(-16px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+@keyframes scaleIn { from { transform: scale(0.95); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.animate-fade-in { animation: fadeIn 0.4s ease both; }
+.animate-slide-up { animation: slideUp 0.4s ease both; }
+.animate-scale-in { animation: scaleIn 0.3s ease both; }

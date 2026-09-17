@@ -1,0 +1,24 @@
+{
+  "peers": {
+    "bgokulshri23@gmail.com": {
+      "id": "bgokulshri23@gmail.com",
+      "name": "GOKUL B",
+      "email": "bgokulshri23@gmail.com",
+      "domain": "Python",
+      "level": "intermediate",
+      "score": 80,
+      "avatar": "https://ui-avatars.com/api/?name=GOKUL%20B&background=D97706&color=fff",
+      "lastSeen": 1789673183304,
+      "offers": [
+        "Python",
+        "Problem Solving",
+        "Code Review"
+      ],
+      "needs": [
+        "System Design",
+        "Performance Optimization"
+      ]
+    }
+  },
+  "messages": []
+}
