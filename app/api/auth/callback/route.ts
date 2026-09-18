@@ -7,6 +7,13 @@ export async function GET(request: Request) {
   const code = searchParams.get('code');
   const next = searchParams.get('next') ?? '/app';
 
+  // Extract public origin from forwarded proxy headers to ensure mobile devices never redirect to localhost
+  const forwardedHost = request.headers.get('x-forwarded-host') || request.headers.get('host');
+  const forwardedProto = request.headers.get('x-forwarded-proto') || 'https';
+  const publicOrigin = forwardedHost
+    ? `${forwardedProto}://${forwardedHost}`
+    : origin;
+
   if (code) {
     const cookieStore = await cookies();
     const supabase = createServerClient(
@@ -30,11 +37,17 @@ export async function GET(request: Request) {
       }
     );
 
-    const { error } = await supabase.auth.exchangeCodeForSession(code);
-    if (!error) {
-      return NextResponse.redirect(`${origin}${next}`);
+    const { data, error } = await supabase.auth.exchangeCodeForSession(code);
+    if (!error && data?.session) {
+      const res = NextResponse.redirect(`${publicOrigin}${next}`);
+      res.cookies.set('synapse_demo_session', 'true', {
+        path: '/',
+        maxAge: 86400 * 30,
+        sameSite: 'lax',
+      });
+      return res;
     }
   }
 
-  return NextResponse.redirect(`${origin}/login?error=auth_callback_error`);
+  return NextResponse.redirect(`${publicOrigin}/login?error=auth_callback_error`);
 }

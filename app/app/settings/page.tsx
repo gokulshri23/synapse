@@ -71,6 +71,24 @@ export default function SettingsPage() {
         localStorage.setItem(`synapse_study_data_${email.toLowerCase()}`, JSON.stringify(updated));
       }
 
+      // Sync to cloud profile API for multi-device consistency
+      if (email) {
+        fetch('/api/user-profile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: fullName.trim(),
+            email: email.toLowerCase(),
+            bio: bio.trim(),
+            domain: studyDomain,
+            level: studyLevel,
+            score: studyScore,
+            goal: studyGoal,
+            onboarding_complete: true,
+          }),
+        }).catch(() => {});
+      }
+
       // Attempt Supabase save
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {

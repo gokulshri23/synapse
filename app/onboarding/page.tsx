@@ -85,6 +85,25 @@ export default function OnboardingPage() {
     localStorage.setItem('synapse_demo_active', isDemo ? 'true' : 'false');
     document.cookie = 'synapse_demo_session=true; path=/; max-age=86400';
 
+    // Save to unified cloud profile API so any other device has immediate access
+    try {
+      await fetch('/api/user-profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: studyData.name,
+          email: normalizedEmail,
+          bio: studyData.bio,
+          domain: studyData.domain,
+          level: studyData.level,
+          goal: studyData.goal,
+          score: studyData.score,
+          completed_at: studyData.completed_at,
+          onboarding_complete: true,
+        }),
+      });
+    } catch (e) {}
+
     // Broadcast registration to peer network so multi-device discovery works instantly
     try {
       await fetch('/api/peer-network', {

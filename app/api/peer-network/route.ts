@@ -1,123 +1,70 @@
 import { NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
-
-// Shared persistence for cross-device peer discovery
-interface ActivePeer {
-  id: string;
-  name: string;
-  email: string;
-  domain: string;
-  level: string;
-  score: number;
-  avatar?: string;
-  lastSeen: number;
-  offers: string[];
-  needs: string[];
-}
-
-interface PeerMessage {
-  id: string;
-  sessionId: string;
-  senderId: string;
-  senderName: string;
-  senderRole: 'peer' | 'me';
-  text: string;
-  timestamp: string;
-}
-
-const CACHE_FILE = path.join(process.cwd(), '.peer_network_cache.json');
-
-function loadCache(): { peers: Record<string, ActivePeer>; messages: PeerMessage[] } {
-  try {
-    if (fs.existsSync(CACHE_FILE)) {
-      return JSON.parse(fs.readFileSync(CACHE_FILE, 'utf-8'));
-    }
-  } catch (e) {}
-  return { peers: {}, messages: [] };
-}
-
-function saveCache(data: { peers: Record<string, ActivePeer>; messages: PeerMessage[] }) {
-  try {
-    fs.writeFileSync(CACHE_FILE, JSON.stringify(data, null, 2), 'utf-8');
-  } catch (e) {}
-}
+import {
+  getActivePeers,
+  updatePeerHeartbeat,
+  getMessages,
+  addMessage,
+} from '@/lib/cloudStore';
 
 export async function GET(req: Request) {
-  const { searchParams } = new URL(req.url);
-  const excludeEmail = searchParams.get('excludeEmail')?.toLowerCase() || '';
-  const excludeId = searchParams.get('excludeId') || '';
-  const sessionId = searchParams.get('sessionId') || '';
+  try {
+    const { searchParams } = new URL(req.url);
+    const excludeEmail = searchParams.get('excludeEmail') || '';
+    const sessionId = searchParams.get('sessionId') || '';
 
-  const cache = loadCache();
+    // If querying chat messages
+    if (sessionId) {
+      const messages = getMessages(sessionId, 60);
+      return NextResponse.json({ messages });
+    }
 
-  // If asking for messages
-  if (sessionId) {
-    const sessionMessages = cache.messages
-      .filter(m => m.sessionId === sessionId || m.sessionId === 'global_collab')
-      .slice(-50);
-    return NextResponse.json({ messages: sessionMessages });
+    // Otherwise querying active peers
+    const peers = getActivePeers(excludeEmail);
+    return NextResponse.json({ peers });
+  } catch (err: any) {
+    return NextResponse.json({ error: err?.message || 'Server error' }, { status: 500 });
   }
-
-  // Prune peers inactive for > 24 hours
-  const now = Date.now();
-  const peersList = Object.values(cache.peers)
-    .filter(p => now - p.lastSeen < 24 * 60 * 60 * 1000)
-    .filter(p => {
-      if (excludeEmail && p.email.toLowerCase() === excludeEmail) return false;
-      if (excludeId && p.id === excludeId) return false;
-      return true;
-    });
-
-  return NextResponse.json({ peers: peersList });
 }
 
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const cache = loadCache();
 
     // Case 1: Posting a message
     if (body.type === 'message') {
-      const msg: PeerMessage = {
-        id: 'msg_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
+      if (!body.text || !body.text.trim()) {
+        return NextResponse.json({ error: 'Message text required' }, { status: 400 });
+      }
+
+      const msg = addMessage({
         sessionId: body.sessionId || 'global_collab',
         senderId: body.senderId || 'anon',
-        senderName: body.senderName || 'Peer',
+        senderName: body.senderName || 'Peer Learner',
         senderRole: 'peer',
-        text: body.text,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      };
-      cache.messages.push(msg);
-      // Keep last 200 messages
-      if (cache.messages.length > 200) cache.messages = cache.messages.slice(-200);
-      saveCache(cache);
+        text: body.text.trim(),
+      });
+
       return NextResponse.json({ success: true, message: msg });
     }
 
-    // Case 2: Registering / heartbeat of an active peer
-    const { id, name, email, domain, level, score, avatar } = body;
+    // Case 2: Registering active peer / heartbeat
+    const { name, email, domain, level, score, avatar, offers, needs } = body;
     if (!email) {
-      return NextResponse.json({ error: 'Email required' }, { status: 400 });
+      return NextResponse.json({ error: 'Email required for peer registration' }, { status: 400 });
     }
 
-    const peerKey = email.toLowerCase();
-    const track = domain || 'React';
-    cache.peers[peerKey] = {
-      id: id || peerKey,
+    const peer = updatePeerHeartbeat({
       name: name || email.split('@')[0],
-      email: peerKey,
-      domain: track,
+      email,
+      domain: domain || 'React',
       level: level || 'intermediate',
-      score: Number(score) || 80,
-      avatar: avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(name || 'Learner')}&background=D97706&color=fff`,
-      lastSeen: Date.now(),
-      offers: [track, 'Problem Solving', 'Code Review'],
-      needs: ['System Design', 'Performance Optimization']
-    };
+      score: Number(score) || 85,
+      avatar,
+      offers,
+      needs,
+    });
 
-    saveCache(cache);
-    return NextResponse.json({ success: true, peer: cache.peers[peerKey] });
+    return NextResponse.json({ success: true, peer });
   } catch (err: any) {
     return NextResponse.json({ error: err?.message || 'Server error' }, { status: 500 });
   }

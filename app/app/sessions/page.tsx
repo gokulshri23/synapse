@@ -146,7 +146,7 @@ function useAsync(asyncFn) {
     }
   }, []);
 
-  // Poll for Live Multi-Device Messages
+  // Poll for Live Multi-Device Messages (1.5s interval for snappy real-time sync)
   useEffect(() => {
     const sessionId = 'global_collab';
     let isSubscribed = true;
@@ -159,8 +159,16 @@ function useAsync(asyncFn) {
           if (Array.isArray(data.messages) && data.messages.length > 0) {
             setMessages(prev => {
               const existingIds = new Set(prev.map(m => m.id));
+              const myEmailLower = (studentEmail || '').trim().toLowerCase();
+
               const newIncoming = data.messages
-                .filter((m: any) => !existingIds.has(m.id) && m.senderId !== studentEmail)
+                .filter((m: any) => {
+                  if (existingIds.has(m.id)) return false;
+                  const senderLower = (m.senderId || '').trim().toLowerCase();
+                  // Don't duplicate messages sent by myself
+                  if (myEmailLower && senderLower === myEmailLower) return false;
+                  return true;
+                })
                 .map((m: any) => ({
                   id: m.id,
                   text: m.text,
@@ -189,7 +197,7 @@ function useAsync(asyncFn) {
       } catch (e) {}
     };
 
-    const interval = setInterval(pollMessages, 2500);
+    const interval = setInterval(pollMessages, 1500);
     return () => {
       isSubscribed = false;
       clearInterval(interval);
@@ -212,6 +220,7 @@ function useAsync(asyncFn) {
     setInput('');
 
     // Broadcast message to live peer network
+    const mySenderId = (studentEmail || 'user_' + studentName).trim().toLowerCase();
     try {
       fetch('/api/peer-network', {
         method: 'POST',
@@ -219,7 +228,7 @@ function useAsync(asyncFn) {
         body: JSON.stringify({
           type: 'message',
           sessionId: 'global_collab',
-          senderId: studentEmail || 'user_' + studentName,
+          senderId: mySenderId,
           senderName: studentName,
           text: userText
         })
