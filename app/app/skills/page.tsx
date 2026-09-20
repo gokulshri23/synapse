@@ -65,28 +65,30 @@ export default function SkillsPage() {
     setLevel(userLevel);
     setScore(userScore);
 
-    // Generate dynamic skill nodes based on domain and assessed score
-    const baseTree = generateSkillTree(userDomain, userLevel);
-    const customized = baseTree.map((s, idx) => {
-      if (userScore >= 80) {
-        if (idx === 0) return { ...s, status: 'mastered' as const, mastery_pct: 100 };
-        if (idx === 1) return { ...s, status: 'mastered' as const, mastery_pct: 88 };
-        if (idx === 2) return { ...s, status: 'active' as const, mastery_pct: 60 };
-        return { ...s, status: 'locked' as const, mastery_pct: 0 };
-      } else if (userScore >= 50) {
-        if (idx === 0) return { ...s, status: 'mastered' as const, mastery_pct: 85 };
-        if (idx === 1) return { ...s, status: 'active' as const, mastery_pct: 45 };
-        return { ...s, status: 'locked' as const, mastery_pct: 0 };
-      } else {
-        if (idx === 0) return { ...s, status: 'active' as const, mastery_pct: 30 };
-        return { ...s, status: 'locked' as const, mastery_pct: 0 };
-      }
-    });
+    // Generate dynamic skill nodes based on domain and assessed level (0 to 5)
+    let activeSkillsTree: Skill[] = [];
+    const savedSkillsKey = `synapse_skills_${userDomain.toLowerCase().replace(/\s+/g, '_')}`;
+    const savedSkillsRaw = localStorage.getItem(savedSkillsKey) || localStorage.getItem('synapse_skills_progress');
+    if (savedSkillsRaw) {
+      try {
+        const parsedTree = JSON.parse(savedSkillsRaw);
+        if (Array.isArray(parsedTree) && parsedTree.length > 0) {
+          activeSkillsTree = parsedTree;
+        }
+      } catch (e) {}
+    }
 
-    setSkills(customized);
+    if (!activeSkillsTree || activeSkillsTree.length === 0) {
+      activeSkillsTree = generateSkillTree(userDomain, userLevel);
+      try {
+        localStorage.setItem(savedSkillsKey, JSON.stringify(activeSkillsTree));
+      } catch (e) {}
+    }
+
+    setSkills(activeSkillsTree);
 
     // Fetch dynamic daily mission tied to next incomplete roadmap topic
-    const nextTopic = customized.find(s => s.status !== 'mastered') || customized[0];
+    const nextTopic = activeSkillsTree.find(s => s.status !== 'mastered') || activeSkillsTree[0];
     const topicName = nextTopic ? nextTopic.name : userDomain;
     const idToUse = userMail || userName || 'learner_default';
 
@@ -201,6 +203,13 @@ export default function SkillsPage() {
       }
 
       nextAvgMastery = Math.round(updated.reduce((acc, curr) => acc + curr.mastery_pct, 0) / updated.length);
+
+      const savedSkillsKey = `synapse_skills_${domain.toLowerCase().replace(/\s+/g, '_')}`;
+      try {
+        localStorage.setItem(savedSkillsKey, JSON.stringify(updated));
+        localStorage.setItem('synapse_skills_progress', JSON.stringify(updated));
+      } catch (e) {}
+
       return updated;
     });
 
@@ -267,7 +276,7 @@ export default function SkillsPage() {
           <span className="text-2xl shrink-0">🎉</span>
           <div>
             <p className="text-sm font-bold">Daily Mission Completed!</p>
-            <p className="text-xs text-muted">+50 XP Awarded • College Transcript Updated</p>
+            <p className="text-xs text-muted">+50 XP Awarded • Learning Portfolio Updated</p>
           </div>
         </div>
       )}
@@ -280,7 +289,7 @@ export default function SkillsPage() {
               🎓
             </div>
             <span className="text-xs uppercase font-bold text-ok tracking-wider">
-              College Skill Test Passed
+              Skill Module Assessment Passed
             </span>
             <h3 className="text-2xl font-serif font-bold text-ink mt-1">
               Score: {showTestSuccessModal.score}%
@@ -295,10 +304,8 @@ export default function SkillsPage() {
                 <span className="font-bold text-amber">+{showTestSuccessModal.xpGained} XP</span>
               </div>
               <div className="flex justify-between items-center">
-                <span className="text-muted">College Letter Grade:</span>
-                <span className="font-bold text-ink">
-                  {showTestSuccessModal.oldGrade} → <span className="text-ok font-extrabold">{showTestSuccessModal.newGrade}</span>
-                </span>
+                <span className="text-muted">Mastery Status:</span>
+                <span className="font-bold text-ok">Module Verified &amp; Mastered</span>
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-muted">Proctor Status:</span>
@@ -347,26 +354,26 @@ export default function SkillsPage() {
         </div>
       )}
 
-      {/* College Academic Transcript Header Banner */}
+      {/* Skill Mastery & Roadmap Header Banner */}
       <div className="bg-card border border-border rounded-[22px] p-6 shadow-xs flex flex-wrap items-center justify-between gap-6">
         <div>
           <div className="flex items-center gap-2 mb-1">
             <span className="text-xs font-bold uppercase tracking-wider text-amber">
-              College of Engineering &amp; Computing
+              Autonomous Peer Learning
             </span>
             <span className="text-[10px] px-2 py-0.5 rounded-full bg-ok/15 text-ok font-bold border border-ok/30">
-              Verified Student
+              Verified Learner
             </span>
           </div>
           <h1 className="text-2xl sm:text-3xl font-serif font-bold text-ink">
-            {studentName}&apos;s Academic Transcript
+            {studentName}&apos;s Learning Roadmap
           </h1>
           <p className="text-xs text-muted mt-1">
-            Track: <strong className="text-ink">{domain}</strong> • Standing: <strong className="text-ink">{level}</strong> • Real-time AI Proctor Surveillance
+            Track: <strong className="text-ink">{domain}</strong> • Standing: <strong className="text-ink capitalize">{level}</strong> • Real-time AI Proctor Surveillance
           </p>
         </div>
 
-        {/* Grade Highlights - Fix #12: Removed 2 middle highlight boxes, keeping Total XP */}
+        {/* Highlights - Fix #12: Removed 2 middle highlight boxes, keeping Total XP */}
         <div className="flex items-center gap-4 sm:gap-6">
           <div className="text-center p-3 bg-card-alt border border-border rounded-2xl min-w-[90px]">
             <span className="text-[10px] uppercase font-bold text-muted block">Total XP</span>
@@ -384,7 +391,7 @@ export default function SkillsPage() {
             <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
               <div>
                 <h2 className="text-xl font-serif font-bold text-ink">Skill Mastery Roadmap</h2>
-                <p className="text-xs text-muted">Take proctored quizzes on each topic to increase your grade &amp; unlock next modules.</p>
+                <p className="text-xs text-muted">Take proctored quizzes on each topic to increase your skill mastery &amp; unlock next modules.</p>
               </div>
               <button
                 type="button"
