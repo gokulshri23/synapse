@@ -81,9 +81,18 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   const handleLogout = async () => {
     try {
-      document.cookie = 'synapse_demo_session=; path=/; max-age=0';
-      localStorage.removeItem('synapse_demo_active');
+      document.cookie = 'synapse_demo_session=; path=/; max-age=0; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+      localStorage.removeItem('synapse_study_data');
       localStorage.removeItem('synapse_user_name');
+      localStorage.removeItem('synapse_user_email');
+      localStorage.removeItem('synapse_demo_active');
+      localStorage.removeItem('synapse_active_peer');
+      localStorage.removeItem('synapse_connected_peers');
+      localStorage.removeItem('synapse_mission_done');
+      localStorage.removeItem('synapse_user_xp');
+      localStorage.removeItem('synapse_skills_progress');
+      localStorage.removeItem('synapse_pending_outgoing');
+      sessionStorage.clear();
       await supabase.auth.signOut();
     } catch (e) {
       console.warn('Signout warning:', e);
