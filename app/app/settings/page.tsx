@@ -129,6 +129,8 @@ export default function SettingsPage() {
       localStorage.removeItem('synapse_connected_peers');
       localStorage.removeItem('synapse_mission_done');
       localStorage.removeItem('synapse_user_xp');
+      localStorage.removeItem('synapse_skills_progress');
+      localStorage.removeItem('synapse_pending_outgoing');
       sessionStorage.clear();
       await supabase.auth.signOut();
     } catch (e) {}

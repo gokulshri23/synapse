@@ -67,8 +67,11 @@ export default function SkillsPage() {
 
     // Generate dynamic skill nodes based on domain and assessed level (0 to 5)
     let activeSkillsTree: Skill[] = [];
-    const savedSkillsKey = `synapse_skills_${userDomain.toLowerCase().replace(/\s+/g, '_')}`;
-    const savedSkillsRaw = localStorage.getItem(savedSkillsKey) || localStorage.getItem('synapse_skills_progress');
+    const userSafe = (userMail || userName || 'user').toLowerCase().replace(/[^a-z0-9]/g, '_');
+    const domainSafe = (userDomain || 'react').toLowerCase().replace(/[^a-z0-9]/g, '_');
+    const savedSkillsKey = `synapse_skills_${userSafe}_${domainSafe}`;
+    const savedSkillsRaw = localStorage.getItem(savedSkillsKey);
+
     if (savedSkillsRaw) {
       try {
         const parsedTree = JSON.parse(savedSkillsRaw);

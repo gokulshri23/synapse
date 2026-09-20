@@ -82,6 +82,7 @@ export default function OnboardingPage() {
     localStorage.setItem(`synapse_study_data_${normalizedEmail}`, JSON.stringify(studyData));
     localStorage.setItem('synapse_user_name', studyData.name);
     localStorage.setItem('synapse_user_email', normalizedEmail);
+    localStorage.removeItem('synapse_skills_progress');
     const isDemo = normalizedEmail.includes('demo');
     localStorage.setItem('synapse_demo_active', isDemo ? 'true' : 'false');
     document.cookie = 'synapse_demo_session=true; path=/; max-age=86400';
