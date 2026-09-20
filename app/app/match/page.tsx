@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { MOCK_PEERS } from '@/lib/constants';
 import { createClient } from '@/lib/supabase/client';
@@ -25,6 +25,20 @@ export default function MatchPage() {
 
   // Tab State: Matches vs Connection Requests
   const [activeTab, setActiveTab] = useState<'matches' | 'requests'>('matches');
+
+  // In-Match Chat State (Chat directly inside Match section)
+  const [activeChatPeer, setActiveChatPeer] = useState<{
+    id: string;
+    name: string;
+    role?: string;
+    skill?: string;
+    score?: number;
+    initials?: string;
+  } | null>(null);
+  const [matchChatMessages, setMatchChatMessages] = useState<Array<{ id: string | number; text: string; sender: 'me' | 'peer'; time: string; senderName?: string }>>([]);
+  const [matchChatInput, setMatchChatInput] = useState('');
+  const [isMatchChatTyping, setIsMatchChatTyping] = useState(false);
+  const chatMessagesEndRef = useRef<HTMLDivElement>(null);
 
   // Agent State
   const [agentMatches, setAgentMatches] = useState<PeerMatchResult[]>([]);
@@ -267,6 +281,166 @@ export default function MatchPage() {
       });
       setIncomingRequests((prev) => prev.filter((r) => r.id !== connId));
     } catch (e) {}
+  };
+
+  const handleOpenInPageChat = (peer: {
+    id: string;
+    name: string;
+    role?: string;
+    skill?: string;
+    score?: number;
+  }) => {
+    const initials = peer.name
+      .split(' ')
+      .map((n) => n[0])
+      .join('')
+      .slice(0, 2);
+
+    setActiveChatPeer({ ...peer, initials });
+
+    // Seed initial welcome message if empty
+    setMatchChatMessages([
+      {
+        id: 'init-1',
+        text: `Hey ${studentName}! I noticed our ${peer.score ? peer.score + '% ' : ''}match on ${peer.skill || domain}. Excited to study and collaborate!`,
+        sender: 'peer',
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        senderName: peer.name,
+      },
+    ]);
+
+    // Save active peer to localStorage for persistence
+    localStorage.setItem(
+      'synapse_active_peer',
+      JSON.stringify({
+        id: peer.id,
+        name: peer.name,
+        domain: peer.skill || domain,
+        isReal: !peer.id.includes('demo') && !peer.id.includes('mock'),
+      })
+    );
+  };
+
+  // Poll for live messages when chat drawer is open
+  useEffect(() => {
+    if (!activeChatPeer) return;
+    let isSubscribed = true;
+
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/peer-network?sessionId=global_collab`);
+        if (res.ok && isSubscribed) {
+          const data = await res.json();
+          if (Array.isArray(data.messages) && data.messages.length > 0) {
+            setMatchChatMessages((prev) => {
+              const existingIds = new Set(prev.map((m) => m.id));
+              const myEmailLower = (studentEmail || '').trim().toLowerCase();
+
+              const newIncoming = data.messages
+                .filter((m: any) => {
+                  if (existingIds.has(m.id)) return false;
+                  const senderLower = (m.senderId || '').trim().toLowerCase();
+                  if (myEmailLower && senderLower === myEmailLower) return false;
+                  return true;
+                })
+                .map((m: any) => ({
+                  id: m.id,
+                  text: m.text,
+                  sender: 'peer' as const,
+                  time: m.timestamp || 'Now',
+                  senderName: m.senderName,
+                }));
+
+              if (newIncoming.length > 0) {
+                return [...prev, ...newIncoming];
+              }
+              return prev;
+            });
+          }
+        }
+      } catch (e) {}
+    };
+
+    const interval = setInterval(poll, 1500);
+    return () => {
+      isSubscribed = false;
+      clearInterval(interval);
+    };
+  }, [activeChatPeer, studentEmail]);
+
+  useEffect(() => {
+    if (activeChatPeer) {
+      chatMessagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [matchChatMessages, activeChatPeer]);
+
+  const handleSendMatchMessage = async (e?: React.FormEvent, customText?: string) => {
+    if (e) e.preventDefault();
+    const textToSend = (customText || matchChatInput).trim();
+    if (!textToSend || !activeChatPeer) return;
+
+    const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const userMsg = {
+      id: 'msg_' + Date.now(),
+      text: textToSend,
+      sender: 'me' as const,
+      time,
+      senderName: studentName,
+    };
+
+    setMatchChatMessages((prev) => [...prev, userMsg]);
+    setMatchChatInput('');
+
+    // Broadcast to peer network
+    const mySenderId = (studentEmail || 'user_' + studentName).trim().toLowerCase();
+    try {
+      fetch('/api/peer-network', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'message',
+          sessionId: 'global_collab',
+          senderId: mySenderId,
+          senderName: studentName,
+          text: textToSend,
+        }),
+      });
+    } catch (e) {}
+
+    // If demo or AI peer, trigger intelligent peer response with Gemini
+    setIsMatchChatTyping(true);
+    try {
+      const res = await fetch('/api/peer-chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: textToSend,
+          track: activeChatPeer.skill || domain,
+          peerName: activeChatPeer.name.replace(' (Demo Peer)', ''),
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setTimeout(() => {
+          setIsMatchChatTyping(false);
+          setMatchChatMessages((prev) => [
+            ...prev,
+            {
+              id: 'reply_' + Date.now(),
+              text: data.reply || "That sounds great! Let's work on this topic together.",
+              sender: 'peer',
+              time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              senderName: activeChatPeer.name,
+            },
+          ]);
+        }, 800);
+      } else {
+        setIsMatchChatTyping(false);
+      }
+    } catch (e) {
+      setIsMatchChatTyping(false);
+    }
   };
 
   const handleOpenChat = (peerName: string, peerId: string, skill: string) => {
@@ -665,34 +839,84 @@ export default function MatchPage() {
                             </div>
                           </div>
 
-                          {/* Action Button */}
+                          {/* Action Buttons with In-Match Chat */}
                           <div className="pt-3 mt-1 border-t border-border/60">
                             {isConnected ? (
                               <div className="flex gap-2">
-                                <span className="flex-1 py-2 px-3 text-center text-xs font-bold text-ok bg-ok/15 border border-ok/30 rounded-xl flex items-center justify-center gap-1.5">
-                                  <span>✓</span> Connected
-                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleOpenInPageChat({
+                                      id: match.peerId,
+                                      name: match.peerName,
+                                      role: match.peerRole,
+                                      skill: match.primarySkill,
+                                      score: match.score,
+                                    })
+                                  }
+                                  className="flex-1 py-2.5 px-3 bg-amber hover:bg-terracotta text-white font-bold text-xs rounded-xl shadow-xs transition-all cursor-pointer flex items-center justify-center gap-1.5 active:scale-98"
+                                >
+                                  <span>💬</span>
+                                  <span>Chat Now</span>
+                                </button>
                                 <button
                                   type="button"
                                   onClick={() => handleOpenChat(match.peerName, match.peerId, match.primarySkill)}
-                                  className="py-2 px-4 bg-amber hover:bg-terracotta text-white font-semibold text-xs rounded-xl transition-colors cursor-pointer"
+                                  className="py-2.5 px-3.5 bg-card-alt hover:bg-card border border-border text-ink font-semibold text-xs rounded-xl transition-colors cursor-pointer flex items-center gap-1"
                                 >
-                                  Chat →
+                                  <span>💻</span>
+                                  <span>IDE</span>
                                 </button>
                               </div>
                             ) : isPending ? (
-                              <span className="w-full py-2.5 px-4 text-center text-xs font-semibold text-amber bg-amber/15 border border-amber/30 rounded-xl flex items-center justify-center gap-1.5">
-                                <span>⏳</span> Request Pending Acceptance
-                              </span>
+                              <div className="flex gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleOpenInPageChat({
+                                      id: match.peerId,
+                                      name: match.peerName,
+                                      role: match.peerRole,
+                                      skill: match.primarySkill,
+                                      score: match.score,
+                                    })
+                                  }
+                                  className="flex-1 py-2.5 px-3 bg-amber/15 hover:bg-amber/25 text-amber border border-amber/30 font-bold text-xs rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                                >
+                                  <span>💬</span>
+                                  <span>Message Peer</span>
+                                </button>
+                                <span className="py-2.5 px-3 text-[11px] font-semibold text-muted bg-card-alt border border-border rounded-xl flex items-center gap-1">
+                                  <span>⏳</span> Pending
+                                </span>
+                              </div>
                             ) : (
-                              <button
-                                type="button"
-                                onClick={() => handleSendConnectionRequest(match)}
-                                className="w-full py-2.5 px-4 bg-amber hover:bg-terracotta text-white text-xs font-bold rounded-xl shadow-xs transition-all active:scale-98 cursor-pointer flex items-center justify-center gap-2"
-                              >
-                                <span>🤝</span>
-                                <span>Connect &amp; Pair</span>
-                              </button>
+                              <div className="flex gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleOpenInPageChat({
+                                      id: match.peerId,
+                                      name: match.peerName,
+                                      role: match.peerRole,
+                                      skill: match.primarySkill,
+                                      score: match.score,
+                                    })
+                                  }
+                                  className="py-2.5 px-3 bg-card-alt hover:bg-card border border-border text-ink font-bold text-xs rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5 active:scale-98"
+                                >
+                                  <span>💬</span>
+                                  <span>Chat</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleSendConnectionRequest(match)}
+                                  className="flex-1 py-2.5 px-3.5 bg-amber hover:bg-terracotta text-white text-xs font-bold rounded-xl shadow-xs transition-all active:scale-98 cursor-pointer flex items-center justify-center gap-1.5"
+                                >
+                                  <span>🤝</span>
+                                  <span>Connect &amp; Pair</span>
+                                </button>
+                              </div>
                             )}
                           </div>
                         </div>
@@ -736,10 +960,24 @@ export default function MatchPage() {
                         <div className="flex items-center gap-2">
                           <button
                             type="button"
+                            onClick={() =>
+                              handleOpenInPageChat({
+                                id: req.requesterId,
+                                name: req.requesterName,
+                                skill: req.skillArea,
+                              })
+                            }
+                            className="px-3 py-2 bg-card-alt hover:bg-card border border-border text-ink font-bold text-xs rounded-xl cursor-pointer transition-colors flex items-center gap-1"
+                          >
+                            <span>💬</span>
+                            <span>Chat</span>
+                          </button>
+                          <button
+                            type="button"
                             onClick={() => handleAcceptRequest(req)}
                             className="px-4 py-2 bg-ok hover:bg-emerald-600 text-white font-bold text-xs rounded-xl shadow-xs cursor-pointer transition-all"
                           >
-                            Accept &amp; Unlock Chat
+                            Accept &amp; Pair
                           </button>
                           <button
                             type="button"
@@ -758,6 +996,123 @@ export default function MatchPage() {
           </div>
         </div>
       </div>
+
+      {/* ======================================================== */}
+      {/* IN-MATCH INTERACTIVE CHAT DRAWER / FLOATING MESSENGER     */}
+      {/* ======================================================== */}
+      {activeChatPeer && (
+        <div className="fixed bottom-4 right-4 z-50 w-full max-w-[380px] sm:max-w-[420px] bg-card border-2 border-amber/40 rounded-3xl shadow-2xl flex flex-col overflow-hidden animate-slide-up transition-all">
+          {/* Drawer Header */}
+          <div className="p-4 bg-gradient-to-r from-card-alt to-card border-b border-border flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-10 h-10 rounded-full bg-gradient-to-br from-amber to-terracotta text-white flex items-center justify-center font-bold text-sm shadow-xs shrink-0">
+                {activeChatPeer.initials || '👥'}
+              </div>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <h3 className="font-serif font-bold text-ink text-sm truncate">{activeChatPeer.name}</h3>
+                  <span className="w-2 h-2 rounded-full bg-ok animate-pulse shrink-0" title="Online now" />
+                </div>
+                <div className="flex items-center gap-1.5 text-[11px] text-muted">
+                  <span className="text-amber font-semibold">{activeChatPeer.skill || domain}</span>
+                  {activeChatPeer.score && (
+                    <span>• {activeChatPeer.score}% Match</span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                onClick={() => handleOpenChat(activeChatPeer.name, activeChatPeer.id, activeChatPeer.skill || domain)}
+                className="px-2.5 py-1 text-[11px] bg-amber/15 text-amber hover:bg-amber hover:text-white font-bold rounded-lg border border-amber/30 transition-all cursor-pointer"
+                title="Launch Collaborative IDE"
+              >
+                IDE →
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveChatPeer(null)}
+                className="w-7 h-7 rounded-lg bg-card-alt border border-border text-muted hover:text-ink flex items-center justify-center text-xs font-bold transition-colors cursor-pointer"
+                title="Close chat"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+
+          {/* Messages Stream */}
+          <div className="p-4 h-[300px] overflow-y-auto space-y-3 bg-canvas/40 flex flex-col">
+            {matchChatMessages.map((msg) => {
+              const isMe = msg.sender === 'me';
+              return (
+                <div key={msg.id} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
+                  <div className="flex items-center gap-1.5 mb-0.5 px-1">
+                    <span className="text-[10px] font-semibold text-muted">
+                      {isMe ? 'You' : msg.senderName || activeChatPeer.name}
+                    </span>
+                    <span className="text-[9px] text-muted">{msg.time}</span>
+                  </div>
+                  <div
+                    className={`max-w-[85%] px-3.5 py-2 rounded-2xl text-xs leading-relaxed ${
+                      isMe
+                        ? 'bg-amber text-white rounded-br-xs shadow-xs'
+                        : 'bg-card border border-border text-ink rounded-bl-xs shadow-2xs'
+                    }`}
+                  >
+                    {msg.text}
+                  </div>
+                </div>
+              );
+            })}
+
+            {isMatchChatTyping && (
+              <div className="flex items-center gap-2 text-xs text-muted p-2 bg-card rounded-xl border border-border w-fit animate-pulse">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber animate-ping" />
+                <span>{activeChatPeer.name} is typing...</span>
+              </div>
+            )}
+            <div ref={chatMessagesEndRef} />
+          </div>
+
+          {/* Quick Prompts */}
+          <div className="px-3 pt-2 pb-1 bg-card border-t border-border flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+            {[
+              '👋 Ready to pair?',
+              '💡 Can you explain this concept?',
+              '🎯 Let’s solve today’s challenge!',
+            ].map((prompt) => (
+              <button
+                key={prompt}
+                type="button"
+                onClick={() => handleSendMatchMessage(undefined, prompt)}
+                className="text-[10px] px-2.5 py-1 rounded-full bg-card-alt border border-border text-muted hover:text-ink hover:border-amber transition-colors whitespace-nowrap cursor-pointer shrink-0"
+              >
+                {prompt}
+              </button>
+            ))}
+          </div>
+
+          {/* Message Input Bar */}
+          <form onSubmit={handleSendMatchMessage} className="p-3 bg-card flex items-center gap-2">
+            <input
+              type="text"
+              value={matchChatInput}
+              onChange={(e) => setMatchChatInput(e.target.value)}
+              placeholder={`Message ${activeChatPeer.name}...`}
+              className="flex-1 px-3.5 py-2 text-xs bg-card-alt border border-border rounded-xl text-ink focus:outline-none focus:border-amber transition-colors"
+            />
+            <button
+              type="submit"
+              disabled={!matchChatInput.trim()}
+              className="px-3.5 py-2 bg-amber hover:bg-terracotta disabled:opacity-40 text-white font-bold text-xs rounded-xl shadow-xs transition-all cursor-pointer shrink-0"
+            >
+              Send
+            </button>
+          </form>
+        </div>
+      )}
     </div>
   );
 }
