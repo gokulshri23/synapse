@@ -17,6 +17,41 @@ export default function FlowLoginScene() {
   const [googleName, setGoogleName] = useState('');
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
 
+  React.useEffect(() => {
+    const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === 'SIGNED_OUT') {
+        localStorage.removeItem('synapse_study_data');
+        localStorage.removeItem('synapse_user_name');
+        localStorage.removeItem('synapse_user_email');
+        localStorage.removeItem('synapse_demo_active');
+        localStorage.removeItem('synapse_active_peer');
+        localStorage.removeItem('synapse_connected_peers');
+        localStorage.removeItem('synapse_mission_done');
+        localStorage.removeItem('synapse_user_xp');
+        sessionStorage.clear();
+      } else if (event === 'SIGNED_IN' && session?.user?.email) {
+        const norm = session.user.email.toLowerCase();
+        try {
+          const res = await fetch(`/api/user-profile?email=${encodeURIComponent(norm)}`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data.profile && data.profile.onboarding_complete) {
+              localStorage.setItem('synapse_study_data', JSON.stringify(data.profile));
+              localStorage.setItem(`synapse_study_data_${norm}`, JSON.stringify(data.profile));
+              localStorage.setItem('synapse_user_name', data.profile.name);
+              localStorage.setItem('synapse_user_email', norm);
+              router.push('/app');
+            }
+          }
+        } catch (e) {}
+      }
+    });
+
+    return () => {
+      authListener?.subscription?.unsubscribe();
+    };
+  }, [supabase, router]);
+
   const handleAuthSubmit = async ({
     email,
     password,
@@ -30,6 +65,13 @@ export default function FlowLoginScene() {
   }): Promise<{ success: boolean; error?: string }> => {
     try {
       const normalizedEmail = email.trim().toLowerCase();
+
+      // Purge any stale session data from previous user
+      localStorage.removeItem('synapse_study_data');
+      localStorage.removeItem('synapse_active_peer');
+      localStorage.removeItem('synapse_connected_peers');
+      localStorage.removeItem('synapse_mission_done');
+      localStorage.removeItem('synapse_user_xp');
 
       // Call the unified auth API (supports unlimited N accounts without email rate limits)
       const res = await fetch('/api/auth/unified', {

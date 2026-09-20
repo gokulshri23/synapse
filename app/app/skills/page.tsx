@@ -7,6 +7,7 @@ import ProctoredQuiz from '@/components/proctor/ProctoredQuiz';
 
 export default function SkillsPage() {
   const [studentName, setStudentName] = useState('Learner');
+  const [studentEmail, setStudentEmail] = useState('');
   const [domain, setDomain] = useState('React');
   const [level, setLevel] = useState('intermediate');
   const [score, setScore] = useState(85);
@@ -15,6 +16,8 @@ export default function SkillsPage() {
   const [missionToast, setMissionToast] = useState(false);
   const [userXp, setUserXp] = useState(350);
   const [selectedOdaeaStep, setSelectedOdaeaStep] = useState<string | null>(null);
+  const [missionData, setMissionData] = useState<{ id: string; taskText: string; sourceTopic: string; xpReward: number; completedAt: string | null } | null>(null);
+  const [completedDays, setCompletedDays] = useState<string[]>([]);
 
   // College-style Skill Test Modal State
   const [activeTestSkill, setActiveTestSkill] = useState<string | null>(null);
@@ -32,12 +35,14 @@ export default function SkillsPage() {
     let userLevel = 'intermediate';
     let userScore = 85;
     let userName = 'Learner';
+    let userMail = '';
 
     try {
       const saved = localStorage.getItem('synapse_study_data');
       if (saved) {
         const parsed = JSON.parse(saved);
         if (parsed.name) userName = parsed.name;
+        if (parsed.email) userMail = parsed.email;
         if (parsed.domain) userDomain = parsed.domain;
         if (parsed.level) userLevel = parsed.level;
         if (typeof parsed.score === 'number') userScore = parsed.score;
@@ -45,6 +50,9 @@ export default function SkillsPage() {
         const cachedName = localStorage.getItem('synapse_user_name');
         if (cachedName) userName = cachedName;
       }
+      const cachedEmail = localStorage.getItem('synapse_user_email');
+      if (cachedEmail) userMail = cachedEmail;
+
       const savedXp = localStorage.getItem('synapse_user_xp');
       if (savedXp) setUserXp(parseInt(savedXp, 10));
       const savedMission = localStorage.getItem('synapse_mission_done');
@@ -52,6 +60,7 @@ export default function SkillsPage() {
     } catch (e) {}
 
     setStudentName(userName);
+    setStudentEmail(userMail);
     setDomain(userDomain);
     setLevel(userLevel);
     setScore(userScore);
@@ -75,6 +84,26 @@ export default function SkillsPage() {
     });
 
     setSkills(customized);
+
+    // Fetch dynamic daily mission tied to next incomplete roadmap topic
+    const nextTopic = customized.find(s => s.status !== 'mastered') || customized[0];
+    const topicName = nextTopic ? nextTopic.name : userDomain;
+    const idToUse = userMail || userName || 'learner_default';
+
+    fetch(`/api/daily-missions?userId=${encodeURIComponent(idToUse)}&topic=${encodeURIComponent(topicName)}`)
+      .then(res => res.json())
+      .then(data => {
+        if (data.mission) {
+          setMissionData(data.mission);
+          if (data.mission.completedAt) {
+            setMissionDone(true);
+          }
+        }
+        if (Array.isArray(data.completedDays)) {
+          setCompletedDays(data.completedDays);
+        }
+      })
+      .catch(() => {});
   }, []);
 
   // Compute College Grade & GPA
@@ -92,7 +121,7 @@ export default function SkillsPage() {
 
   const currentCollegeGrade = computeCollegeGrade(avgMastery);
 
-  const handleCompleteMission = () => {
+  const handleCompleteMission = async () => {
     if (missionDone) return;
     const nextXp = userXp + 50;
     const nextScore = Math.min(100, score + 3);
@@ -110,6 +139,23 @@ export default function SkillsPage() {
         const parsed = JSON.parse(saved);
         parsed.score = nextScore;
         localStorage.setItem('synapse_study_data', JSON.stringify(parsed));
+      }
+    } catch (e) {}
+
+    try {
+      const idToUse = studentEmail || studentName || 'learner_default';
+      const res = await fetch('/api/daily-missions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: idToUse,
+          missionId: missionData?.id,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        const today = new Date().toISOString().split('T')[0];
+        setCompletedDays(prev => Array.from(new Set([...prev, today])));
       }
     } catch (e) {}
 
@@ -320,20 +366,8 @@ export default function SkillsPage() {
           </p>
         </div>
 
-        {/* Grade Highlights */}
+        {/* Grade Highlights - Fix #12: Removed 2 middle highlight boxes, keeping Total XP */}
         <div className="flex items-center gap-4 sm:gap-6">
-          <div className="text-center p-3 bg-card-alt border border-border rounded-2xl min-w-[90px]">
-            <span className="text-[10px] uppercase font-bold text-muted block">Semester Grade</span>
-            <span className="text-2xl font-serif font-bold text-ok">{currentCollegeGrade.letter}</span>
-            <span className="text-[9px] text-muted block">{currentCollegeGrade.label}</span>
-          </div>
-
-          <div className="text-center p-3 bg-card-alt border border-border rounded-2xl min-w-[90px]">
-            <span className="text-[10px] uppercase font-bold text-muted block">GPA Equivalent</span>
-            <span className="text-2xl font-serif font-bold text-ink">{currentCollegeGrade.gpa.split(' ')[0]}</span>
-            <span className="text-[9px] text-muted block">Scale 4.0</span>
-          </div>
-
           <div className="text-center p-3 bg-card-alt border border-border rounded-2xl min-w-[90px]">
             <span className="text-[10px] uppercase font-bold text-muted block">Total XP</span>
             <span className="text-2xl font-serif font-bold text-amber">{userXp}</span>
@@ -498,30 +532,62 @@ export default function SkillsPage() {
 
         {/* Right Column: Mission & Metrics (1 Col) */}
         <div className="space-y-6">
-          {/* Card 2: Daily Mission */}
+          {/* Card 2: Daily Mission (Tied to dynamic roadmap topic) */}
           <div className="bg-card border border-border rounded-[22px] p-6 shadow-xs flex flex-col justify-between">
             <div>
               <div className="flex justify-between items-center mb-3">
                 <h3 className="text-lg font-serif font-bold text-ink">Daily Mission</h3>
                 <span className="text-xs px-2 py-0.5 rounded-md bg-amber/10 text-amber font-bold border border-amber/20">
-                  +50 XP
+                  +{missionData?.xpReward || 50} XP
                 </span>
               </div>
 
               <div className="p-4 bg-card-alt rounded-xl border border-border mb-4">
                 <span className="text-[11px] uppercase tracking-wider text-muted block mb-1">
-                  Active Challenge • {domain}
+                  Active Challenge • {missionData?.sourceTopic || domain}
                 </span>
                 <h4 className="text-sm font-semibold text-ink mb-1.5">
-                  {domain === 'Python' ? 'Refactor OOP Class with Generics' :
-                   domain === 'Machine Learning' ? 'Implement Loss Function & Backprop' :
-                   domain === 'Data Structures' ? 'Optimize Tree Traversal Complexity' :
-                   domain === 'JavaScript' ? 'Create Debounced Event Listener' :
-                   'Build Custom useLocalStorage Hook'}
+                  {missionData?.taskText || `Master ${domain}: Solve 2 practice challenges & explain concept to a peer`}
                 </h4>
                 <p className="text-xs text-muted leading-relaxed">
-                  Focus on architectural clarity, error edge cases, and clean typing. Submit your artifact or discuss with a matched peer.
+                  Focus on architectural clarity, edge cases, and clean typing. Ties directly to your current skill roadmap frontier.
                 </p>
+              </div>
+
+              {/* 7-Day Completion Tracker / Mini Calendar */}
+              <div className="mb-4 p-3 bg-card-alt rounded-xl border border-border">
+                <div className="flex justify-between items-center mb-2">
+                  <span className="text-[10px] uppercase font-bold text-muted tracking-wider">Weekly Streak Tracker</span>
+                  <span className="text-xs font-semibold text-ok">
+                    {completedDays.length} day{completedDays.length === 1 ? '' : 's'} completed
+                  </span>
+                </div>
+                <div className="grid grid-cols-7 gap-1.5 text-center">
+                  {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day, dIdx) => {
+                    // Check if this day of week has been completed
+                    const isDone = dIdx === (new Date().getDay() + 6) % 7 ? missionDone : dIdx < (new Date().getDay() + 6) % 7 && completedDays.length > 0;
+                    const isToday = dIdx === (new Date().getDay() + 6) % 7;
+
+                    return (
+                      <div key={day} className="flex flex-col items-center gap-1">
+                        <span className={`text-[10px] ${isToday ? 'font-bold text-amber' : 'text-muted'}`}>
+                          {day}
+                        </span>
+                        <div
+                          className={`w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold transition-all ${
+                            isDone
+                              ? 'bg-ok text-white shadow-xs'
+                              : isToday
+                              ? 'border-2 border-dashed border-amber text-amber bg-amber/5'
+                              : 'bg-card border border-border text-muted'
+                          }`}
+                        >
+                          {isDone ? '✓' : isToday ? '•' : ''}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             </div>
 
@@ -548,46 +614,7 @@ export default function SkillsPage() {
               )}
             </button>
           </div>
-
-          {/* Card 3: Overall College Mastery */}
-          <div className="bg-card border border-border rounded-[22px] p-6 shadow-xs">
-            <h3 className="text-lg font-serif font-bold text-ink mb-4">College Transcript</h3>
-            <div className="flex items-center justify-center my-3">
-              <div className="relative w-28 h-28 rounded-full border-4 border-amber/20 flex flex-col items-center justify-center text-center shadow-xs">
-                <div
-                  className="absolute inset-0 rounded-full border-4 border-amber transition-all duration-1000"
-                  style={{
-                    clipPath: `polygon(0 0, 100% 0, 100% ${avgMastery}%, 0 ${avgMastery}%)`
-                  }}
-                />
-                <span className="text-2xl font-serif font-bold text-ink">{avgMastery}%</span>
-                <span className="text-[10px] uppercase font-semibold text-muted tracking-wider">Overall</span>
-              </div>
-            </div>
-
-            <div className="space-y-2 text-xs pt-2">
-              <div className="flex justify-between py-1 border-b border-border/50">
-                <span className="text-muted">Academic Grade:</span>
-                <span className="font-bold text-ok">{currentCollegeGrade.letter} ({currentCollegeGrade.label})</span>
-              </div>
-              <div className="flex justify-between py-1 border-b border-border/50">
-                <span className="text-muted">GPA Equivalent:</span>
-                <span className="font-semibold text-ink">{currentCollegeGrade.gpa}</span>
-              </div>
-              <div className="flex justify-between py-1 border-b border-border/50">
-                <span className="text-muted">Domain Track:</span>
-                <span className="font-semibold text-ink">{domain}</span>
-              </div>
-              <div className="flex justify-between py-1 border-b border-border/50">
-                <span className="text-muted">Assessed Level:</span>
-                <span className="font-semibold text-ink capitalize">{level}</span>
-              </div>
-              <div className="flex justify-between py-1">
-                <span className="text-muted">Total Reputation:</span>
-                <span className="font-bold text-amber">{userXp} XP</span>
-              </div>
-            </div>
-          </div>
+          {/* Fix #12: Removed Card 3 (College Transcript box) */}
         </div>
       </div>
     </div>

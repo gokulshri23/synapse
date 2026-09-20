@@ -16,6 +16,10 @@ export default function SessionsPage() {
     isReal: false
   });
 
+  const [isConnectionAccepted, setIsConnectionAccepted] = useState(true);
+  const [challengeTitle, setChallengeTitle] = useState('Collaborative Hook Implementation');
+  const [challengeDescription, setChallengeDescription] = useState('Build a resilient custom async hook with loading, data, and error state handling.');
+
   const [messages, setMessages] = useState<Array<{ id: string | number; text: string; sender: 'me' | 'peer'; time: string; senderName?: string }>>([
     { id: 'm1', text: 'Hey! Ready to collaborate on our challenges?', sender: 'peer', time: '10:14 AM' },
     { id: 'm2', text: 'Yes! Working on optimizing component state and async data fetching.', sender: 'me', time: '10:15 AM' }
@@ -69,6 +73,7 @@ function useAsync(asyncFn) {
     let currentEmail = '';
     let currentName = 'Learner';
     let currentTrack = 'React';
+    let peerId = 'peer-default';
 
     try {
       const saved = localStorage.getItem('synapse_study_data');
@@ -102,8 +107,9 @@ function useAsync(asyncFn) {
       const savedPeer = localStorage.getItem('synapse_active_peer');
       if (savedPeer) {
         const parsedPeer = JSON.parse(savedPeer);
+        peerId = parsedPeer.id || 'peer-active';
         setActivePeer({
-          id: parsedPeer.id || 'peer-active',
+          id: peerId,
           name: parsedPeer.name || 'Peer Partner',
           initials: parsedPeer.name ? parsedPeer.name.split(' ').map((n: string) => n[0]).join('').slice(0, 2) : 'PP',
           skill: parsedPeer.domain || parsedPeer.offers?.[0] || `${currentTrack} Track`,
@@ -131,6 +137,45 @@ function useAsync(asyncFn) {
         }
       }
     } catch (e) {}
+
+    // Check connection status: B4: Unlock chat only upon accept
+    if (currentEmail && peerId && !peerId.includes('demo') && !peerId.includes('maya')) {
+      fetch(`/api/connections?userId=${encodeURIComponent(currentEmail)}`)
+        .then((res) => res.json())
+        .then((data) => {
+          const normPeer = peerId.trim().toLowerCase();
+          const activeList = Array.isArray(data.active) ? data.active : [];
+          const isAccepted = activeList.some(
+            (c: any) => c.requesterId === normPeer || c.recipientId === normPeer
+          );
+          // If in outgoing pending list and not yet accepted
+          const outgoingList = Array.isArray(data.pendingOutgoing) ? data.pendingOutgoing : [];
+          const isPending = outgoingList.some((c: any) => c.recipientId === normPeer);
+          if (isPending && !isAccepted) {
+            setIsConnectionAccepted(false);
+          } else {
+            setIsConnectionAccepted(true);
+          }
+        })
+        .catch(() => {
+          setIsConnectionAccepted(true);
+        });
+    }
+
+    // Fetch collaborative challenge from /api/challenge (B5)
+    const sessionId = [currentEmail.trim().toLowerCase(), peerId.trim().toLowerCase()].sort().join('_') || 'global_collab';
+    fetch(`/api/challenge?sessionId=${encodeURIComponent(sessionId)}&skillArea=${encodeURIComponent(currentTrack)}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.challenge) {
+          setChallengeTitle(data.challenge.title);
+          setChallengeDescription(data.challenge.description);
+          if (data.challenge.starterCode) {
+            setCodeSnippet(data.challenge.starterCode);
+          }
+        }
+      })
+      .catch(() => {});
 
     // Register active session with network
     if (currentEmail) {
@@ -330,7 +375,7 @@ function useAsync(asyncFn) {
     }
   };
 
-  const handleSubmitReview = (e: React.FormEvent) => {
+  const handleSubmitReview = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!reviewText.trim()) return;
     setReviewSubmitted(true);
@@ -338,6 +383,24 @@ function useAsync(asyncFn) {
     const nextXp = userXp + 25;
     setUserXp(nextXp);
     localStorage.setItem('synapse_user_xp', nextXp.toString());
+
+    try {
+      const myId = (studentEmail || studentName).trim().toLowerCase();
+      const peerId = (activePeer.id || activePeer.name).trim().toLowerCase();
+      const sessionId = [myId, peerId].sort().join('_') || 'global_collab';
+
+      await fetch('/api/rate-peer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          raterId: myId,
+          rateeId: peerId,
+          sessionId,
+          stars: rating,
+          comment: reviewText.trim(),
+        }),
+      });
+    } catch (e) {}
   };
 
   return (
@@ -405,6 +468,16 @@ function useAsync(asyncFn) {
             </span>
           </div>
 
+          {/* Pending Connection Banner - B4: Lock chat until accepted */}
+          {!isConnectionAccepted && (
+            <div className="p-3 bg-amber/10 border-b border-amber/25 text-xs text-ink flex items-center gap-2 shrink-0">
+              <span className="text-base">🔒</span>
+              <span>
+                <strong>Connection Pending:</strong> Waiting for {activePeer.name} to accept your connection invite. Real-time chat will unlock automatically upon acceptance.
+              </span>
+            </div>
+          )}
+
           {/* Messages Scroll Area */}
           <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3.5 bg-card">
             {messages.map((m) => {
@@ -446,15 +519,20 @@ function useAsync(asyncFn) {
               type="text"
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder={`Message ${activePeer.name}...`}
-              className="flex-1 px-4 py-2.5 bg-card border border-border rounded-xl text-ink text-xs sm:text-sm placeholder-muted/60 outline-none focus:border-amber"
+              disabled={!isConnectionAccepted}
+              placeholder={
+                !isConnectionAccepted
+                  ? `Chat locked — waiting for ${activePeer.name} to accept connection...`
+                  : `Message ${activePeer.name}...`
+              }
+              className="flex-1 px-4 py-2.5 bg-card border border-border rounded-xl text-ink text-xs sm:text-sm placeholder-muted/60 outline-none focus:border-amber disabled:opacity-60"
             />
             <button
               type="submit"
-              disabled={!input.trim()}
+              disabled={!isConnectionAccepted || !input.trim()}
               className="px-4 py-2.5 bg-amber hover:bg-terracotta text-white font-bold text-xs rounded-xl shadow-xs transition-all disabled:opacity-50 cursor-pointer"
             >
-              Send →
+              {!isConnectionAccepted ? 'Locked 🔒' : 'Send →'}
             </button>
           </form>
         </div>
@@ -468,7 +546,7 @@ function useAsync(asyncFn) {
                 <span className="text-xs font-bold uppercase tracking-wider text-amber">
                   Collaborative Challenge
                 </span>
-                <h3 className="text-lg font-serif font-bold text-ink">Custom Async Hook Implementation</h3>
+                <h3 className="text-lg font-serif font-bold text-ink">{challengeTitle}</h3>
               </div>
               <span className="text-xs px-2.5 py-1 bg-amber/10 text-amber font-bold rounded-lg border border-amber/20">
                 +75 XP
@@ -476,7 +554,7 @@ function useAsync(asyncFn) {
             </div>
 
             <p className="text-xs text-muted">
-              Edit the code solution below with your peer. When ready, submit it to <strong>Gemini 3.6 Flash</strong> to grade your correctness and earn college transcript credit.
+              {challengeDescription} Submit your solution to <strong>Gemini 3.6 Flash</strong> to grade correctness and earn college credit.
             </p>
 
             {/* Code Textarea */}

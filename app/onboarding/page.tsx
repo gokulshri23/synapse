@@ -22,8 +22,9 @@ export default function OnboardingPage() {
   const [name, setName] = useState('');
   const [bio, setBio] = useState('');
   const [domain, setDomain] = useState('React');
-  const [level, setLevel] = useState<'beginner' | 'intermediate' | 'advanced'>('intermediate');
+  const [level, setLevel] = useState<'0' | 'beginner' | 'intermediate' | 'advanced'>('intermediate');
   const [goal, setGoal] = useState('30-day sprint to skill mastery');
+  const [showConsentScreen, setShowConsentScreen] = useState(false);
   const [quizStarted, setQuizStarted] = useState(false);
   const [quizScore, setQuizScore] = useState<number | null>(null);
   const [email, setEmail] = useState('');
@@ -270,51 +271,146 @@ export default function OnboardingPage() {
                     ))}
                   </div>
 
-                  {/* Level Selector */}
+                  {/* Level Selector (Proficiency Scale: 0 to 4+) */}
                   <div className="space-y-2">
                     <label className="text-xs font-semibold uppercase tracking-wider text-muted">
                       Your Self-Assessed Level
                     </label>
-                    <div className="grid grid-cols-3 gap-3">
-                      {(['beginner', 'intermediate', 'advanced'] as const).map((l) => (
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                      {[
+                        { id: '0' as const, label: '0 — No knowledge yet', desc: 'Skip quiz & start at topic 1' },
+                        { id: 'beginner' as const, label: '1 — Beginner', desc: 'Basic terminology' },
+                        { id: 'intermediate' as const, label: '3 — Intermediate', desc: 'Projects & patterns' },
+                        { id: 'advanced' as const, label: '4 — Advanced', desc: 'Architecture & deep dives' },
+                      ].map((l) => (
                         <button
-                          key={l}
+                          key={l.id}
                           type="button"
-                          onClick={() => setLevel(l)}
-                          className={`py-3 px-2 rounded-xl border text-center capitalize text-xs font-semibold transition-all cursor-pointer ${
-                            level === l
-                              ? 'border-amber bg-amber/10 text-amber'
+                          onClick={() => setLevel(l.id)}
+                          className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                            level === l.id
+                              ? 'border-amber bg-amber/10 text-amber shadow-2xs ring-1 ring-amber'
                               : 'border-border bg-card-alt text-ink hover:border-amber/50'
                           }`}
                         >
-                          {l}
+                          <span className="font-semibold text-xs block">{l.label}</span>
+                          <span className="text-[10px] text-muted block mt-0.5">{l.desc}</span>
                         </button>
                       ))}
                     </div>
                   </div>
 
-                  {/* Anti-Cheating Notice */}
-                  <div className="p-3.5 rounded-xl bg-card-alt border border-border text-xs text-muted flex items-center gap-3">
-                    <span className="text-xl">🛡️</span>
+                  {level === '0' ? (
+                    <div className="p-4 rounded-xl bg-ok/10 border border-ok/30 text-xs text-ink space-y-2">
+                      <div className="flex items-center gap-2 font-bold text-ok">
+                        <span>🌱</span>
+                        <span>Foundational Onboarding Mode Activated</span>
+                      </div>
+                      <p className="text-muted leading-relaxed">
+                        Since you have no prior knowledge of <strong>{domain}</strong>, the diagnostic assessment is waived. Your personalized curriculum will begin at foundational Topic 1 with guided step-by-step peer mentorship.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setQuizScore(10);
+                          setStep(3);
+                        }}
+                        className="w-full mt-2 py-3.5 bg-ok hover:bg-emerald-600 text-white font-bold rounded-xl text-sm transition-all shadow-sm cursor-pointer"
+                      >
+                        Start Roadmap from Topic 1 (Skip Diagnostic Quiz) →
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      {/* Anti-Cheating Notice */}
+                      <div className="p-3.5 rounded-xl bg-card-alt border border-border text-xs text-muted flex items-center gap-3">
+                        <span className="text-xl">🛡️</span>
+                        <div>
+                          <span className="font-semibold text-ink block">Proctored Assessment Notice</span>
+                          <span>Webcam monitoring detects external phones/notebooks and prohibits tab switching.</span>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => setShowConsentScreen(true)}
+                        className="w-full py-3.5 bg-amber hover:bg-terracotta text-white font-semibold rounded-xl text-sm transition-all shadow-sm cursor-pointer"
+                      >
+                        Review Proctor Consent &amp; Rules for {domain} →
+                      </button>
+                    </>
+                  )}
+                </div>
+              ) : showConsentScreen && !quizStarted ? (
+                /* PRE-QUIZ CONSENT INTERSTITIAL SCREEN (B2) */
+                <div className="space-y-5 animate-fade-in">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-amber/15 text-amber flex items-center justify-center text-xl font-bold">
+                      🛡️
+                    </div>
                     <div>
-                      <span className="font-semibold text-ink block">Proctored Assessment Notice</span>
-                      <span>The upcoming quiz enables webcam monitoring to detect external devices/notebooks and prohibits tab switching.</span>
+                      <h3 className="text-xl font-serif font-bold text-ink">Examination Protocol &amp; Consent</h3>
+                      <p className="text-xs text-muted">Review proctoring rules before camera activation for {domain}</p>
                     </div>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => setQuizStarted(true)}
-                    className="w-full py-3.5 bg-amber hover:bg-terracotta text-white font-semibold rounded-xl text-sm transition-all shadow-sm cursor-pointer"
-                  >
-                    Start Proctored Assessment for {domain} →
-                  </button>
+                  <div className="space-y-3 bg-card-alt p-5 rounded-2xl border border-border text-xs">
+                    <div className="flex items-start gap-3">
+                      <span className="text-lg">📱</span>
+                      <div>
+                        <strong className="text-ink block">No Secondary Devices or Notes</strong>
+                        <span className="text-muted">Mobile phones, physical notebooks, or secondary tablets in frame trigger cheating strikes.</span>
+                      </div>
+                    </div>
+                    <div className="flex items-start gap-3">
+                      <span className="text-lg">👤</span>
+                      <div>
+                        <strong className="text-ink block">Solo Frame Policy</strong>
+                        <span className="text-muted">Remain centered in webcam view for the entire duration of the assessment.</span>
+                      </div>
+                    </div>
+                    <div className="flex items-start gap-3">
+                      <span className="text-lg">🚫</span>
+                      <div>
+                        <strong className="text-ink block">Zero Tab Switching</strong>
+                        <span className="text-muted">Leaving the browser tab or opening other windows is automatically logged as a strike.</span>
+                      </div>
+                    </div>
+                    <div className="flex items-start gap-3">
+                      <span className="text-lg">⏱️</span>
+                      <div>
+                        <strong className="text-ink block">3-Second Calibration Grace</strong>
+                        <span className="text-muted">Surveillance arms only after camera feed is confirmed live. No false start strikes.</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setShowConsentScreen(false)}
+                      className="py-3 px-4 rounded-xl border border-border text-xs font-semibold text-muted hover:text-ink cursor-pointer"
+                    >
+                      ← Back
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setQuizStarted(true)}
+                      className="flex-1 py-3.5 bg-amber hover:bg-terracotta text-white font-bold rounded-xl text-sm transition-all shadow-sm cursor-pointer"
+                    >
+                      I Understand — Start Proctored Quiz →
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <ProctoredQuiz
                   skill={domain}
                   level={level}
                   onComplete={handleQuizComplete}
+                  onCancel={() => {
+                    setQuizStarted(false);
+                    setShowConsentScreen(false);
+                  }}
                 />
               )}
             </div>

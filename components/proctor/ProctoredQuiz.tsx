@@ -42,6 +42,8 @@ export default function ProctoredQuiz({ skill, level, onComplete, onCancel }: Pr
   const [tabViolations, setTabViolations] = useState(0);
   const [showViolationModal, setShowViolationModal] = useState(false);
   const [proctorLogs, setProctorLogs] = useState<Array<{ time: string; msg: string; type: 'info' | 'warn' | 'ok' }>>([]);
+  const [isWarmedUp, setIsWarmedUp] = useState(false);
+  const [warmupSeconds, setWarmupSeconds] = useState(3);
 
   // Audio Alert Sound (Web Audio API)
   const playAlertSound = useCallback(() => {
@@ -115,10 +117,11 @@ export default function ProctoredQuiz({ skill, level, onComplete, onCancel }: Pr
     }, 4500);
   }, [playAlertSound]);
 
-  // 2. High-Performance Instant Camera Initialization
+  // 2. High-Performance Instant Camera Initialization with 3s Grace Warm-up
   useEffect(() => {
     let stream: MediaStream | null = null;
     let isActive = true;
+    let warmupInterval: any = null;
 
     async function initCamera() {
       try {
@@ -140,18 +143,32 @@ export default function ProctoredQuiz({ skill, level, onComplete, onCancel }: Pr
                 videoRef.current.play().catch(() => {});
                 setCameraActive(true);
                 setProctorStatus('normal');
-                addLog('Webcam live feed engaged at 60 FPS', 'ok');
+                addLog('Webcam live feed engaged. 3-second grace calibration started.', 'ok');
+
+                // 3-second warm-up grace period: never evaluate before stream is confirmed live
+                let remaining = 3;
+                warmupInterval = setInterval(() => {
+                  remaining -= 1;
+                  setWarmupSeconds(remaining);
+                  if (remaining <= 0) {
+                    clearInterval(warmupInterval);
+                    setIsWarmedUp(true);
+                    addLog('Proctor vision surveillance fully armed', 'ok');
+                  }
+                }, 1000);
               }
             };
           }
         } else {
           setCameraError('Camera API unavailable');
           setCameraActive(true);
+          setIsWarmedUp(true);
         }
       } catch (err: any) {
         console.warn('Camera access note:', err);
         setCameraError('Webcam permission not granted or in use. Virtual proctor ready.');
         setCameraActive(true);
+        setIsWarmedUp(true);
         addLog('Virtual AI camera mode ready', 'info');
       }
     }
@@ -160,6 +177,7 @@ export default function ProctoredQuiz({ skill, level, onComplete, onCancel }: Pr
 
     return () => {
       isActive = false;
+      if (warmupInterval) clearInterval(warmupInterval);
       if (stream) {
         stream.getTracks().forEach(track => track.stop());
       }
@@ -167,7 +185,7 @@ export default function ProctoredQuiz({ skill, level, onComplete, onCancel }: Pr
     };
   }, []);
 
-  // 3. Tab-Switch & Focus Loss Anti-Cheating Detection
+  // 3. Tab-Switch Anti-Cheating Detection (Strictly visibilitychange — NO blur listener to avoid false strikes)
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.hidden && !quizFinished) {
@@ -175,18 +193,10 @@ export default function ProctoredQuiz({ skill, level, onComplete, onCancel }: Pr
       }
     };
 
-    const handleWindowBlur = () => {
-      if (!quizFinished) {
-        triggerTabViolation('Application lost focus');
-      }
-    };
-
     document.addEventListener('visibilitychange', handleVisibilityChange);
-    window.addEventListener('blur', handleWindowBlur);
 
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
-      window.removeEventListener('blur', handleWindowBlur);
     };
   }, [quizFinished]);
 
@@ -203,9 +213,9 @@ export default function ProctoredQuiz({ skill, level, onComplete, onCancel }: Pr
   };
 
   // 4. Intelligent Non-Blocking Cloud Vision Proctoring (Gemini 3.6 Flash)
-  // Runs every 4 seconds in background to avoid any frame lag or false positives from clothing/hair
+  // ONLY runs AFTER the 3-second grace calibration has completed!
   useEffect(() => {
-    if (!cameraActive || quizFinished) return;
+    if (!cameraActive || !isWarmedUp || quizFinished) return;
 
     let scanTimer: any = null;
 
@@ -244,13 +254,13 @@ export default function ProctoredQuiz({ skill, level, onComplete, onCancel }: Pr
       }
     };
 
-    // Periodic deep inspection
-    scanTimer = setInterval(runProctorCloudInspection, 4000);
+    // Periodic deep inspection every 4.5s
+    scanTimer = setInterval(runProctorCloudInspection, 4500);
 
     return () => {
       if (scanTimer) clearInterval(scanTimer);
     };
-  }, [cameraActive, quizFinished, triggerCheatingAlert]);
+  }, [cameraActive, isWarmedUp, quizFinished, triggerCheatingAlert]);
 
   const handleSelectOption = (index: number) => {
     const updated = [...selectedAnswers];
@@ -359,7 +369,8 @@ export default function ProctoredQuiz({ skill, level, onComplete, onCancel }: Pr
             <div className="absolute inset-0 pointer-events-none flex flex-col justify-between p-2">
               <div className="flex justify-between items-center text-[10px] font-mono">
                 <span className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-black/75 text-ok font-bold">
-                  <span className="w-2 h-2 rounded-full bg-ok animate-pulse" /> LIVE PROCTOR
+                  <span className={`w-2 h-2 rounded-full ${isWarmedUp ? 'bg-ok animate-pulse' : 'bg-amber animate-ping'}`} />
+                  {isWarmedUp ? 'LIVE PROCTOR' : `CALIBRATING (${warmupSeconds}s)`}
                 </span>
                 <span className="text-white/90 px-1.5 py-0.5 rounded bg-black/60 font-semibold">
                   GEMINI 3.6 VISION

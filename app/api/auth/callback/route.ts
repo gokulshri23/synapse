@@ -10,9 +10,20 @@ export async function GET(request: Request) {
   // Extract public origin from forwarded proxy headers to ensure mobile devices never redirect to localhost
   const forwardedHost = request.headers.get('x-forwarded-host') || request.headers.get('host');
   const forwardedProto = request.headers.get('x-forwarded-proto') || 'https';
-  const publicOrigin = forwardedHost
+  let publicOrigin = forwardedHost
     ? `${forwardedProto}://${forwardedHost}`
     : origin;
+
+  // Safeguard: If running in production or origin has localhost on deployed Vercel, prioritize production host
+  if (publicOrigin.includes('localhost') && typeof window === 'undefined') {
+    if (process.env.VERCEL_PROJECT_PRODUCTION_URL) {
+      publicOrigin = `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`;
+    } else if (process.env.VERCEL_URL) {
+      publicOrigin = `https://${process.env.VERCEL_URL}`;
+    } else {
+      publicOrigin = 'https://synapse1-eta.vercel.app';
+    }
+  }
 
   if (code) {
     const cookieStore = await cookies();

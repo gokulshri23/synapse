@@ -41,20 +41,75 @@ const TEMPLATES: Record<string, Partial<Skill>[]> = {
   ],
 };
 
-export function generateSkillTree(domain: string, _level: string): Skill[] {
-  const key = domain.toLowerCase();
-  const template = TEMPLATES[key] || TEMPLATES.react;
-  return template.map((s, i) => ({
-    id: crypto.randomUUID(),
-    user_id: '',
-    name: s.name || 'Skill',
-    mastery_pct: s.mastery_pct ?? 0,
-    level: s.level ?? 1,
-    status: (i === 0 ? 'active' : s.status ?? 'locked') as Skill['status'],
-    parent_skill_id: i > 0 ? null : null,
-    description: s.description || '',
-    order_index: s.order_index ?? i,
-  }));
+export function generateSkillTree(domain: string, levelInput?: string | number): Skill[] {
+  const key = domain ? domain.toLowerCase().trim() : 'react';
+  
+  // Find best matching template
+  let template = TEMPLATES[key];
+  if (!template) {
+    if (key.includes('py')) template = TEMPLATES.python;
+    else if (key.includes('react') || key.includes('next') || key.includes('web')) template = TEMPLATES.react;
+    else if (key.includes('machine') || key.includes('ml') || key.includes('ai')) template = TEMPLATES['machine learning'];
+    else if (key.includes('script') || key.includes('js') || key.includes('node')) template = TEMPLATES.javascript;
+    else if (key.includes('data') || key.includes('algo') || key.includes('structure')) template = TEMPLATES['data structures'];
+    else template = TEMPLATES.react;
+  }
+
+  // Parse level (0 = No knowledge, 1 = Beginner, 2 = Elementary, 3 = Intermediate, 4 = Advanced, 5 = Expert)
+  let numericLevel = 0;
+  if (typeof levelInput === 'number') {
+    numericLevel = Math.max(0, Math.min(5, levelInput));
+  } else if (typeof levelInput === 'string') {
+    const match = levelInput.match(/\d+/);
+    if (match) {
+      numericLevel = parseInt(match[0], 10);
+    } else if (levelInput.toLowerCase().includes('intermediate')) {
+      numericLevel = 3;
+    } else if (levelInput.toLowerCase().includes('advanced')) {
+      numericLevel = 4;
+    } else if (levelInput.toLowerCase().includes('expert')) {
+      numericLevel = 5;
+    } else if (levelInput.toLowerCase().includes('beginner')) {
+      numericLevel = 1;
+    }
+  }
+
+  return template.map((s, i) => {
+    let status: Skill['status'] = 'locked';
+    let mastery = 0;
+
+    if (numericLevel === 0) {
+      // Level 0: Completely fresh, first topic is active at 0%
+      if (i === 0) {
+        status = 'active';
+        mastery = 0;
+      } else {
+        status = 'locked';
+        mastery = 0;
+      }
+    } else if (i < numericLevel) {
+      status = 'mastered';
+      mastery = 90 + Math.min(10, (i + 1) * 2);
+    } else if (i === numericLevel) {
+      status = 'active';
+      mastery = 25;
+    } else {
+      status = 'locked';
+      mastery = 0;
+    }
+
+    return {
+      id: crypto.randomUUID(),
+      user_id: '',
+      name: s.name || 'Skill',
+      mastery_pct: mastery,
+      level: s.level ?? (i + 1),
+      status,
+      parent_skill_id: i > 0 ? null : null,
+      description: s.description || '',
+      order_index: s.order_index ?? i,
+    };
+  });
 }
 
 export function generateDailyMission(skills: Skill[]): DailyMission {
