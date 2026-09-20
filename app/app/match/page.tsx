@@ -374,12 +374,15 @@ export default function MatchPage() {
               'EVALUATE NETWORK',
               'CREATE CONNECTIONS',
               'EXPLAIN',
+              'MONITOR',
+              'RECLASSIFY',
+              'REMATCH',
             ].map((step, idx) => (
               <div key={step} className="flex items-center gap-1.5 shrink-0">
                 <span className="px-2 py-1 bg-amber/10 border border-amber/25 text-amber font-semibold rounded-md">
                   {idx + 1}. {step}
                 </span>
-                {idx < 8 && <span className="text-muted/60">→</span>}
+                {idx < 11 && <span className="text-muted/60">→</span>}
               </div>
             ))}
           </div>

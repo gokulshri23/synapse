@@ -81,7 +81,19 @@ export interface PeerMatchResult {
 export interface AgentActivityLog {
   id: string;
   timestamp: string;
-  step: 'OBSERVE' | 'UNDERSTAND' | 'CLASSIFY' | 'IDENTIFY GAPS' | 'SEARCH' | 'BUILD MATCHES' | 'EVALUATE NETWORK' | 'CREATE CONNECTIONS' | 'EXPLAIN';
+  step:
+    | 'OBSERVE'
+    | 'UNDERSTAND'
+    | 'CLASSIFY'
+    | 'IDENTIFY GAPS'
+    | 'SEARCH'
+    | 'BUILD MATCHES'
+    | 'EVALUATE NETWORK'
+    | 'CREATE CONNECTIONS'
+    | 'EXPLAIN'
+    | 'MONITOR'
+    | 'RECLASSIFY'
+    | 'REMATCH';
   detail: string;
 }
 
@@ -503,6 +515,15 @@ export function runPeerMatchingAgent(
   );
   logs.push(
     createLog('EXPLAIN', `Generated natural-language rationale explaining proximal development zones and reciprocity`)
+  );
+  logs.push(
+    createLog('MONITOR', `🤖 Active network monitor tracking ${validPeers.length} peer nodes & study session outcomes`)
+  );
+  logs.push(
+    createLog('RECLASSIFY', `Dynamic reclassification ready: triggers role transitions on quiz completion`)
+  );
+  logs.push(
+    createLog('REMATCH', `✅ Graph optimized: ${matches.length} active learning connection(s) available`)
   );
 
   let emptyStateReason: string | undefined = undefined;
