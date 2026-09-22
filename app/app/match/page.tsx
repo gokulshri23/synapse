@@ -75,6 +75,7 @@ export default function MatchPage() {
 
   const [connectToast, setConnectToast] = useState<string | null>(null);
   const [isScanning, setIsScanning] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   useEffect(() => {
     let currentEmail = '';
@@ -128,7 +129,30 @@ export default function MatchPage() {
     // Fetch peers and run matching agent with active skills
     fetchAndMatchPeers(currentEmail, currentName, currentDomain, currentLevel, currentTeach, currentSeek);
     fetchConnections(currentEmail);
+
+    // Auto-poll incoming connection requests every 3 seconds so new requests appear in real time without refreshing
+    const pollTimer = setInterval(() => {
+      const activeEmail = currentEmail || localStorage.getItem('synapse_user_email') || '';
+      if (activeEmail) {
+        fetchConnections(activeEmail);
+      }
+    }, 3000);
+
+    return () => clearInterval(pollTimer);
   }, []);
+
+  const handleManualRefresh = async () => {
+    setIsRefreshing(true);
+    const emailToPoll = (studentEmail || localStorage.getItem('synapse_user_email') || '').trim();
+    try {
+      await Promise.all([
+        fetchConnections(emailToPoll),
+        fetchAndMatchPeers(emailToPoll, studentName, domain, userLevel, canTeach, seekingGuidance),
+      ]);
+    } finally {
+      setTimeout(() => setIsRefreshing(false), 500);
+    }
+  };
 
   const fetchConnections = async (email: string) => {
     if (!email) return;
@@ -924,7 +948,10 @@ export default function MatchPage() {
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => setActiveTab('matches')}
+                  onClick={() => {
+                    setActiveTab('matches');
+                    fetchAndMatchPeers(studentEmail, studentName, domain, userLevel);
+                  }}
                   className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                     activeTab === 'matches'
                       ? 'bg-amber text-white shadow-xs'
@@ -935,7 +962,10 @@ export default function MatchPage() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setActiveTab('requests')}
+                  onClick={() => {
+                    setActiveTab('requests');
+                    fetchConnections(studentEmail);
+                  }}
                   className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
                     activeTab === 'requests'
                       ? 'bg-amber text-white shadow-xs'
@@ -944,10 +974,22 @@ export default function MatchPage() {
                 >
                   <span>Incoming Requests</span>
                   {incomingRequests.length > 0 && (
-                    <span className="w-4 h-4 rounded-full bg-bad text-white text-[10px] flex items-center justify-center font-bold">
+                    <span className="w-4 h-4 rounded-full bg-bad text-white text-[10px] flex items-center justify-center font-bold animate-pulse">
                       {incomingRequests.length}
                     </span>
                   )}
+                </button>
+
+                {/* Quick Reload Button (No Page Reload Needed) */}
+                <button
+                  type="button"
+                  onClick={handleManualRefresh}
+                  disabled={isRefreshing}
+                  title="Check for new requests and updates without reloading the page"
+                  className="px-3 py-2 rounded-xl text-xs font-semibold bg-card-alt border border-border hover:border-amber text-ink hover:text-amber transition-all cursor-pointer flex items-center gap-1.5 shadow-xs shrink-0"
+                >
+                  <span className={isRefreshing ? 'animate-spin' : ''}>🔄</span>
+                  <span>{isRefreshing ? 'Checking...' : 'Refresh'}</span>
                 </button>
               </div>
 
@@ -1229,15 +1271,36 @@ export default function MatchPage() {
             {activeTab === 'requests' && (
               <div>
                 {incomingRequests.length === 0 ? (
-                  <div className="p-8 rounded-2xl border-2 border-dashed border-border bg-card-alt flex flex-col items-center text-center gap-2 animate-fade-in">
+                  <div className="p-8 rounded-2xl border-2 border-dashed border-border bg-card-alt flex flex-col items-center text-center gap-3 animate-fade-in">
                     <span className="text-3xl">📬</span>
-                    <h3 className="text-base font-serif font-bold text-ink">No Pending Requests</h3>
+                    <h3 className="text-base font-serif font-bold text-ink">No Pending Requests Yet</h3>
                     <p className="text-xs text-muted max-w-sm">
-                      When peers on another device send you a connection invite, it will appear here instantly.
+                      When peers on another device send you a connection invite, it will appear here. The system also checks automatically every 3 seconds!
                     </p>
+                    <button
+                      type="button"
+                      onClick={handleManualRefresh}
+                      disabled={isRefreshing}
+                      className="mt-2 px-4 py-2 bg-amber hover:bg-terracotta text-white text-xs font-bold rounded-xl shadow-xs transition-all cursor-pointer flex items-center gap-1.5 active:scale-98"
+                    >
+                      <span className={isRefreshing ? 'animate-spin' : ''}>🔄</span>
+                      <span>{isRefreshing ? 'Checking Cloud...' : 'Check for Incoming Requests'}</span>
+                    </button>
                   </div>
                 ) : (
                   <div className="space-y-3">
+                    <div className="flex items-center justify-between px-1 text-xs text-muted">
+                      <span>Pending Invitations ({incomingRequests.length})</span>
+                      <button
+                        type="button"
+                        onClick={handleManualRefresh}
+                        disabled={isRefreshing}
+                        className="text-xs text-amber hover:underline font-semibold flex items-center gap-1 cursor-pointer"
+                      >
+                        <span className={isRefreshing ? 'animate-spin' : ''}>🔄</span>
+                        <span>Refresh List</span>
+                      </button>
+                    </div>
                     {incomingRequests.map((req) => (
                       <div
                         key={req.id}
