@@ -14,6 +14,21 @@ const AVAILABLE_DOMAINS = [
   { id: 'Data Structures', name: 'Data Structures', desc: 'Arrays, Trees, Graphs & Dynamic Programming', icon: '🌲' },
 ];
 
+const SKILL_TAGS = [
+  { id: 'React', label: 'React', icon: '⚛️' },
+  { id: 'Python', label: 'Python', icon: '🐍' },
+  { id: 'JavaScript', label: 'JavaScript', icon: '⚡' },
+  { id: 'Machine Learning', label: 'Machine Learning', icon: '🧠' },
+  { id: 'Data Structures', label: 'Data Structures', icon: '🌲' },
+  { id: 'System Design', label: 'System Design', icon: '🏗️' },
+  { id: 'Algorithms', label: 'Algorithms', icon: '🧩' },
+  { id: 'Web Development', label: 'Web Development', icon: '🌐' },
+  { id: 'Databases', label: 'Databases', icon: '🗄️' },
+  { id: 'DevOps', label: 'DevOps & Cloud', icon: '☁️' },
+  { id: 'Problem Solving', label: 'Problem Solving', icon: '💡' },
+  { id: 'Mobile Development', label: 'Mobile Dev', icon: '📱' },
+];
+
 export default function OnboardingPage() {
   const router = useRouter();
   const supabase = createClient();
@@ -28,6 +43,8 @@ export default function OnboardingPage() {
   const [quizStarted, setQuizStarted] = useState(false);
   const [quizScore, setQuizScore] = useState<number | null>(null);
   const [email, setEmail] = useState('');
+  const [canTeach, setCanTeach] = useState<string[]>([]);
+  const [seekingGuidance, setSeeekingGuidance] = useState<string[]>([]);
 
   useEffect(() => {
     async function loadUser() {
@@ -59,6 +76,8 @@ export default function OnboardingPage() {
     violationsCount: number;
   }) => {
     setQuizScore(result.score);
+    if (canTeach.length === 0) setCanTeach([domain, 'Problem Solving']);
+    if (seekingGuidance.length === 0) setSeeekingGuidance([domain === 'React' ? 'Python' : 'React', 'Algorithms']);
     setStep(3);
   };
 
@@ -75,6 +94,8 @@ export default function OnboardingPage() {
       goal: goal.trim() || '30-day sprint to skill mastery',
       score: quizScore ?? 80,
       completed_at: new Date().toISOString(),
+      canTeach: canTeach.length > 0 ? canTeach : [domain, 'Problem Solving'],
+      seekingGuidance: seekingGuidance.length > 0 ? seekingGuidance : [domain === 'React' ? 'Python' : 'React', 'Algorithms'],
     };
 
     // Save to localStorage for active session and user-specific key
@@ -117,6 +138,8 @@ export default function OnboardingPage() {
           domain: studyData.domain,
           level: studyData.level,
           score: studyData.score,
+          offers: studyData.canTeach,
+          needs: studyData.seekingGuidance,
         })
       });
     } catch (e) {}
@@ -166,8 +189,9 @@ export default function OnboardingPage() {
         <div className="flex justify-center mb-8 gap-3">
           {[
             { num: 1, label: 'Profile' },
-            { num: 2, label: 'AI Assessment' },
-            { num: 3, label: 'Goal & Roadmap' }
+            { num: 2, label: 'Assessment' },
+            { num: 3, label: 'Teach & Learn' },
+            { num: 4, label: 'Goal & Launch' }
           ].map((s) => (
             <div key={s.num} className="flex-1 flex flex-col items-center gap-1.5">
               <div
@@ -314,11 +338,13 @@ export default function OnboardingPage() {
                         type="button"
                         onClick={() => {
                           setQuizScore(10);
+                          if (canTeach.length === 0) setCanTeach([domain, 'Problem Solving']);
+                          if (seekingGuidance.length === 0) setSeeekingGuidance([domain === 'React' ? 'Python' : 'React', 'Algorithms']);
                           setStep(3);
                         }}
                         className="w-full mt-2 py-3.5 bg-ok hover:bg-emerald-600 text-white font-bold rounded-xl text-sm transition-all shadow-sm cursor-pointer"
                       >
-                        Start Roadmap from Topic 1 (Skip Diagnostic Quiz) →
+                        Continue to Peer Skills Setup (Skip Diagnostic Quiz) →
                       </button>
                     </div>
                   ) : (
@@ -417,8 +443,140 @@ export default function OnboardingPage() {
             </div>
           )}
 
-          {/* STEP 3: Learning Goal & Launch */}
+          {/* STEP 3: Peer Exchange Preferences (Eligible to Teach / Help & Seeking Guidance) */}
           {step === 3 && (
+            <div className="space-y-6 animate-fade-in">
+              <div>
+                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber/10 border border-amber/20 text-amber text-xs font-semibold mb-2">
+                  <span>🤝</span> Peer Matching Setup (Connection Section)
+                </div>
+                <h2 className="text-2xl font-serif font-bold text-ink">What are you Eligible to Teach & Seeking Guidance in?</h2>
+                <p className="text-sm text-muted mt-1">
+                  The <strong className="text-ink">Connection Section</strong> uses this to find your optimal study partners. You will be matched with peers who need what you can teach and peers who can guide you in skills you want to learn.
+                </p>
+              </div>
+
+              {/* Eligible to Teach / Help */}
+              <div className="space-y-3 p-4 rounded-2xl bg-card-alt border border-border">
+                <div>
+                  <label className="text-xs font-bold uppercase tracking-wider text-ink flex items-center gap-1.5">
+                    <span className="text-base">🎓</span> What are you Eligible to Teach / Help with?
+                  </label>
+                  <p className="text-xs text-muted mt-0.5">
+                    Select topics where you are confident to share knowledge, explain concepts, or review code.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2 pt-1">
+                  {SKILL_TAGS.map((tag) => {
+                    const isSelected = canTeach.includes(tag.id);
+                    return (
+                      <button
+                        key={tag.id}
+                        type="button"
+                        onClick={() => {
+                          setCanTeach(prev =>
+                            prev.includes(tag.id) ? prev.filter(t => t !== tag.id) : [...prev, tag.id]
+                          );
+                        }}
+                        className={`px-3.5 py-2 rounded-xl text-xs font-medium border transition-all cursor-pointer flex items-center gap-1.5 ${
+                          isSelected
+                            ? 'border-ok bg-ok/15 text-ok ring-2 ring-ok/30 shadow-xs'
+                            : 'border-border bg-card text-muted hover:border-ok/50 hover:text-ink'
+                        }`}
+                      >
+                        <span>{tag.icon}</span>
+                        <span>{tag.label}</span>
+                        {isSelected && <span className="font-bold">✓</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+                {canTeach.length > 0 && (
+                  <p className="text-[11px] text-ok font-medium flex items-center gap-1 mt-1">
+                    <span>✓</span> You will be recommended to peers looking for <strong>{canTeach.join(', ')}</strong>.
+                  </p>
+                )}
+              </div>
+
+              {/* Seeking Guidance */}
+              <div className="space-y-3 p-4 rounded-2xl bg-card-alt border border-border">
+                <div>
+                  <label className="text-xs font-bold uppercase tracking-wider text-ink flex items-center gap-1.5">
+                    <span className="text-base">🔍</span> What are you Seeking Guidance in?
+                  </label>
+                  <p className="text-xs text-muted mt-0.5">
+                    Select topics where you want a peer mentor, study partner, or hands-on coaching.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2 pt-1">
+                  {SKILL_TAGS.map((tag) => {
+                    const isSelected = seekingGuidance.includes(tag.id);
+                    return (
+                      <button
+                        key={tag.id}
+                        type="button"
+                        onClick={() => {
+                          setSeeekingGuidance(prev =>
+                            prev.includes(tag.id) ? prev.filter(t => t !== tag.id) : [...prev, tag.id]
+                          );
+                        }}
+                        className={`px-3.5 py-2 rounded-xl text-xs font-medium border transition-all cursor-pointer flex items-center gap-1.5 ${
+                          isSelected
+                            ? 'border-amber bg-amber/15 text-amber ring-2 ring-amber/30 shadow-xs'
+                            : 'border-border bg-card text-muted hover:border-amber/50 hover:text-ink'
+                        }`}
+                      >
+                        <span>{tag.icon}</span>
+                        <span>{tag.label}</span>
+                        {isSelected && <span className="font-bold">✓</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+                {seekingGuidance.length > 0 && (
+                  <p className="text-[11px] text-amber font-medium flex items-center gap-1 mt-1">
+                    <span>✓</span> The matching agent will prioritize mentors and helpers in <strong>{seekingGuidance.join(', ')}</strong>.
+                  </p>
+                )}
+              </div>
+
+              {/* Connection Readiness Callout */}
+              <div className="p-3.5 rounded-xl bg-amber/10 border border-amber/20 text-xs text-ink flex items-start gap-3">
+                <span className="text-xl">⚡</span>
+                <div>
+                  <strong className="block font-semibold">Powers the Connection Section</strong>
+                  <span className="text-muted">
+                    Our Autonomous Peer Agent scans the network to find reciprocal matches (you teach what they need, they teach what you need) to unlock collaborative challenges and chat.
+                  </span>
+                </div>
+              </div>
+
+              {/* Navigation Buttons */}
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setStep(2)}
+                  className="py-3.5 px-5 rounded-xl border border-border text-xs font-semibold text-muted hover:text-ink cursor-pointer transition-all"
+                >
+                  ← Back to Assessment
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (canTeach.length === 0) setCanTeach([domain, 'Problem Solving']);
+                    if (seekingGuidance.length === 0) setSeeekingGuidance([domain === 'React' ? 'Python' : 'React', 'Algorithms']);
+                    setStep(4);
+                  }}
+                  className="flex-1 py-3.5 bg-amber hover:bg-terracotta text-white font-bold rounded-xl text-sm transition-all shadow-sm cursor-pointer"
+                >
+                  Continue to Goal & Roadmap →
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* STEP 4: Learning Goal & Launch */}
+          {step === 4 && (
             <form onSubmit={handleFinishOnboarding} className="space-y-6 animate-fade-in">
               <div>
                 <h2 className="text-2xl font-serif font-bold text-ink">Set your learning goal</h2>
@@ -464,27 +622,40 @@ export default function OnboardingPage() {
               </div>
 
               {/* Summary Pill Card */}
-              <div className="p-4 bg-card-alt rounded-xl border border-border flex justify-between items-center text-xs">
+              <div className="p-4 bg-card-alt rounded-2xl border border-border grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
                 <div>
-                  <span className="text-muted block">Benchmark Score</span>
+                  <span className="text-muted block">Benchmark</span>
                   <span className="text-base font-bold text-ok">{quizScore}%</span>
                 </div>
                 <div>
-                  <span className="text-muted block">Curated Roadmap</span>
+                  <span className="text-muted block">Roadmap</span>
                   <span className="text-sm font-semibold text-ink">{domain}</span>
                 </div>
                 <div>
-                  <span className="text-muted block">Target Pace</span>
-                  <span className="text-sm font-semibold text-amber">{goal.slice(0, 15)}...</span>
+                  <span className="text-muted block">🎓 Can Teach</span>
+                  <span className="text-sm font-semibold text-ok">{canTeach.length > 0 ? canTeach.join(', ') : 'None'}</span>
+                </div>
+                <div>
+                  <span className="text-muted block">🔍 Seeking</span>
+                  <span className="text-sm font-semibold text-amber">{seekingGuidance.length > 0 ? seekingGuidance.join(', ') : 'None'}</span>
                 </div>
               </div>
 
-              <button
-                type="submit"
-                className="w-full py-4 bg-amber hover:bg-terracotta text-white font-bold rounded-xl text-sm transition-all shadow-md active:scale-[0.99] cursor-pointer"
-              >
-                🚀 Generate My Dynamic Dashboard & Begin →
-              </button>
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setStep(3)}
+                  className="py-3.5 px-5 rounded-xl border border-border text-xs font-semibold text-muted hover:text-ink cursor-pointer transition-all"
+                >
+                  ← Back to Peer Skills
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-4 bg-amber hover:bg-terracotta text-white font-bold rounded-xl text-sm transition-all shadow-md active:scale-[0.99] cursor-pointer"
+                >
+                  🚀 Generate Dashboard & Find Peer Matches →
+                </button>
+              </div>
             </form>
           )}
         </div>

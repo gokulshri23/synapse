@@ -54,7 +54,7 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { name, email, bio, domain, level, goal, score, completed_at, onboarding_complete } = body;
+    const { name, email, bio, domain, level, goal, score, completed_at, onboarding_complete, canTeach, seekingGuidance, offers, needs } = body;
 
     if (!email) {
       return NextResponse.json({ success: false, error: 'Email is required' }, { status: 400 });
@@ -70,6 +70,8 @@ export async function POST(req: Request) {
       score: typeof score === 'number' ? score : 85,
       completed_at: completed_at || new Date().toISOString(),
       onboarding_complete: onboarding_complete ?? true,
+      canTeach: canTeach || offers,
+      seekingGuidance: seekingGuidance || needs,
     });
 
     // Also attempt remote sync to Supabase if connected

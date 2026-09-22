@@ -123,6 +123,8 @@ export default function FlowLoginScene() {
           goal: result.profile.goal || '30-day sprint to skill mastery',
           score: result.profile.score ?? 85,
           completed_at: result.profile.completed_at || new Date().toISOString(),
+          canTeach: result.profile.canTeach || result.profile.offers || [result.profile.domain || 'React', 'Problem Solving'],
+          seekingGuidance: result.profile.seekingGuidance || result.profile.needs || [result.profile.domain === 'React' ? 'Python' : 'React', 'Algorithms'],
         };
         localStorage.setItem('synapse_study_data', JSON.stringify(studyData));
         localStorage.setItem(`synapse_study_data_${normalizedEmail}`, JSON.stringify(studyData));

@@ -38,6 +38,10 @@ export interface CloudProfile {
     method?: string;
     pace?: string;
   };
+  canTeach?: string[];
+  seekingGuidance?: string[];
+  offers?: string[];
+  needs?: string[];
 }
 
 export interface CloudPeer {
@@ -267,6 +271,8 @@ export function saveCloudProfile(profile: Partial<CloudProfile> & { email: strin
     learning_goals: profile.learning_goals || existing.learning_goals || [{ skill: profile.domain || 'React', currentLevel: numLevel, targetLevel: Math.min(5, numLevel + 2) }],
     availability: profile.availability || existing.availability || ['Weekday Evenings', 'Weekend Mornings'],
     preferences: profile.preferences || existing.preferences || { method: 'Hands-on Code Pairing', pace: 'Intensive' },
+    canTeach: profile.canTeach || profile.offers || existing.canTeach || [profile.domain || 'React', 'Problem Solving'],
+    seekingGuidance: profile.seekingGuidance || profile.needs || existing.seekingGuidance || [profile.domain === 'React' ? 'Python' : 'React', 'Algorithms'],
   };
 
   store.profiles[normalized] = updated;
@@ -282,8 +288,8 @@ export function saveCloudProfile(profile: Partial<CloudProfile> & { email: strin
       numeric_level: updated.numeric_level,
       score: updated.score,
       lastSeen: Date.now(),
-      offers: [updated.domain, 'Problem Solving', 'Code Review'],
-      needs: ['System Design', 'Performance Optimization'],
+      offers: updated.canTeach || [updated.domain, 'Problem Solving', 'Code Review'],
+      needs: updated.seekingGuidance || ['System Design', 'Performance Optimization'],
       onboarding_complete: true,
     };
   } else {

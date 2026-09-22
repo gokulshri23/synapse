@@ -13,6 +13,21 @@ import {
   PeerRole,
 } from '@/lib/agents/peer-matching-agent';
 
+const MATCH_SKILL_TAGS = [
+  { id: 'React', label: 'React', icon: '⚛️' },
+  { id: 'Python', label: 'Python', icon: '🐍' },
+  { id: 'JavaScript', label: 'JavaScript', icon: '⚡' },
+  { id: 'Machine Learning', label: 'Machine Learning', icon: '🧠' },
+  { id: 'Data Structures', label: 'Data Structures', icon: '🌲' },
+  { id: 'System Design', label: 'System Design', icon: '🏗️' },
+  { id: 'Algorithms', label: 'Algorithms', icon: '🧩' },
+  { id: 'Web Development', label: 'Web Dev', icon: '🌐' },
+  { id: 'Databases', label: 'Databases', icon: '🗄️' },
+  { id: 'DevOps', label: 'DevOps', icon: '☁️' },
+  { id: 'Problem Solving', label: 'Problem Solving', icon: '💡' },
+  { id: 'Mobile Development', label: 'Mobile Dev', icon: '📱' },
+];
+
 export default function MatchPage() {
   const router = useRouter();
   const supabase = createClient();
@@ -22,6 +37,13 @@ export default function MatchPage() {
   const [domain, setDomain] = useState('React');
   const [userLevel, setUserLevel] = useState<any>('intermediate');
   const [isDemo, setIsDemo] = useState(false);
+
+  // Peer Exchange Profile State (Powers Connection Section)
+  const [canTeach, setCanTeach] = useState<string[]>(['React', 'Problem Solving']);
+  const [seekingGuidance, setSeekingGuidance] = useState<string[]>(['Python', 'Algorithms']);
+  const [isEditingSkills, setIsEditingSkills] = useState(false);
+  const [draftCanTeach, setDraftCanTeach] = useState<string[]>([]);
+  const [draftSeeking, setDraftSeeking] = useState<string[]>([]);
 
   // Tab State: Matches vs Connection Requests
   const [activeTab, setActiveTab] = useState<'matches' | 'requests'>('matches');
@@ -59,6 +81,8 @@ export default function MatchPage() {
     let currentName = 'Learner';
     let currentDomain = 'React';
     let currentLevel: any = 'intermediate';
+    let currentTeach = ['React', 'Problem Solving'];
+    let currentSeek = ['Python', 'Algorithms'];
 
     try {
       const saved = localStorage.getItem('synapse_study_data');
@@ -68,10 +92,23 @@ export default function MatchPage() {
         if (parsed.domain) currentDomain = parsed.domain;
         if (parsed.level) currentLevel = parsed.level;
         if (parsed.email) currentEmail = parsed.email;
+        if (Array.isArray(parsed.canTeach) && parsed.canTeach.length > 0) {
+          currentTeach = parsed.canTeach;
+        } else {
+          currentTeach = [currentDomain, 'Problem Solving'];
+        }
+        if (Array.isArray(parsed.seekingGuidance) && parsed.seekingGuidance.length > 0) {
+          currentSeek = parsed.seekingGuidance;
+        } else {
+          currentSeek = [currentDomain === 'React' ? 'Python' : 'React', 'Algorithms'];
+        }
       } else {
         const cachedName = localStorage.getItem('synapse_user_name');
         if (cachedName) currentName = cachedName;
       }
+
+      setCanTeach(currentTeach);
+      setSeekingGuidance(currentSeek);
 
       const cachedEmail = localStorage.getItem('synapse_user_email');
       if (cachedEmail) currentEmail = cachedEmail;
@@ -88,8 +125,8 @@ export default function MatchPage() {
       if (savedOutgoing) setPendingOutgoing(JSON.parse(savedOutgoing));
     } catch (e) {}
 
-    // Fetch peers and run matching agent
-    fetchAndMatchPeers(currentEmail, currentName, currentDomain, currentLevel);
+    // Fetch peers and run matching agent with active skills
+    fetchAndMatchPeers(currentEmail, currentName, currentDomain, currentLevel, currentTeach, currentSeek);
     fetchConnections(currentEmail);
   }, []);
 
@@ -116,7 +153,9 @@ export default function MatchPage() {
     currentEmail: string,
     currentName: string,
     currentDomain: string,
-    lvl: any
+    lvl: any,
+    customOffers?: string[],
+    customNeeds?: string[]
   ) => {
     setIsScanning(true);
     const discoveredPeers: any[] = [];
@@ -191,14 +230,17 @@ export default function MatchPage() {
         }));
 
     // Step 1 to 14: Execute the Autonomous Peer Matching Agent
+    const activeOffers = customOffers && customOffers.length > 0 ? customOffers : canTeach;
+    const activeNeeds = customNeeds && customNeeds.length > 0 ? customNeeds : seekingGuidance;
+
     const currentUserObj = {
       id: currentEmail || 'current_user',
       name: currentName,
       email: currentEmail,
       domain: currentDomain,
       level: lvl,
-      offers: [currentDomain, 'Problem Solving'],
-      needs: [currentDomain === 'React' ? 'Python' : 'React', 'Architecture'],
+      offers: activeOffers.length > 0 ? activeOffers : [currentDomain, 'Problem Solving'],
+      needs: activeNeeds.length > 0 ? activeNeeds : [currentDomain === 'React' ? 'Python' : 'React', 'Algorithms'],
     };
 
     const agentResult = runPeerMatchingAgent(currentUserObj, peersPool);
@@ -207,6 +249,59 @@ export default function MatchPage() {
     setAgentLogs(agentResult.activityLogs);
     setEmptyStateReason(agentResult.emptyStateReason || null);
     setIsScanning(false);
+  };
+
+  const handleSaveSkillPreferences = async () => {
+    const updatedTeach = draftCanTeach.length > 0 ? draftCanTeach : [domain, 'Problem Solving'];
+    const updatedSeek = draftSeeking.length > 0 ? draftSeeking : [domain === 'React' ? 'Python' : 'React', 'Algorithms'];
+
+    setCanTeach(updatedTeach);
+    setSeekingGuidance(updatedSeek);
+    setIsEditingSkills(false);
+
+    try {
+      const saved = localStorage.getItem('synapse_study_data');
+      const parsed = saved ? JSON.parse(saved) : {};
+      parsed.canTeach = updatedTeach;
+      parsed.seekingGuidance = updatedSeek;
+      localStorage.setItem('synapse_study_data', JSON.stringify(parsed));
+      if (studentEmail) {
+        localStorage.setItem(`synapse_study_data_${studentEmail.toLowerCase()}`, JSON.stringify(parsed));
+      }
+
+      // Broadcast updated offers and needs to live multi-device peer network
+      await fetch('/api/peer-network', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: studentName,
+          email: studentEmail || 'learner@synapse.edu',
+          domain: domain,
+          level: userLevel,
+          offers: updatedTeach,
+          needs: updatedSeek,
+        }),
+      });
+
+      // Sync to cloud profile
+      await fetch('/api/user-profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: studentName,
+          email: studentEmail || 'learner@synapse.edu',
+          domain: domain,
+          level: userLevel,
+          canTeach: updatedTeach,
+          seekingGuidance: updatedSeek,
+        }),
+      });
+    } catch (e) {}
+
+    // Immediately recalculate connection matches with updated skills
+    fetchAndMatchPeers(studentEmail, studentName, domain, userLevel, updatedTeach, updatedSeek);
+    setConnectToast('Peer Exchange skills updated! Connection matches recalculated.');
+    setTimeout(() => setConnectToast(null), 4000);
   };
 
   const handleSendConnectionRequest = async (match: PeerMatchResult) => {
@@ -500,6 +595,173 @@ export default function MatchPage() {
         </div>
       )}
 
+      {/* Peer Exchange Profile Banner: What are you Eligible to Teach / Help & Seeking Guidance */}
+      <div className="bg-card border border-border rounded-[22px] p-5 sm:p-6 shadow-xs space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-ok/15 text-ok flex items-center justify-center text-xl font-bold">
+              🤝
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="text-base font-serif font-bold text-ink">
+                  Your Peer Exchange Profile
+                </h3>
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber/10 text-amber font-semibold border border-amber/20">
+                  POWERS CONNECTIONS
+                </span>
+              </div>
+              <p className="text-xs text-muted">
+                The Connection Section matches you based on what you can teach and what you want to learn.
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              if (!isEditingSkills) {
+                setDraftCanTeach(canTeach);
+                setDraftSeeking(seekingGuidance);
+              }
+              setIsEditingSkills(!isEditingSkills);
+            }}
+            className="px-3.5 py-1.5 bg-card-alt border border-border hover:border-amber text-ink rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer"
+          >
+            <span>{isEditingSkills ? '✕ Close Editor' : '✏️ Change Teach / Learn Skills'}</span>
+          </button>
+        </div>
+
+        {!isEditingSkills ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+            {/* Can Teach Display */}
+            <div className="p-3.5 rounded-xl bg-card-alt border border-border/80 space-y-1.5">
+              <span className="text-xs font-bold uppercase tracking-wider text-ok flex items-center gap-1.5">
+                <span>🎓</span> What you are Eligible to Teach / Help
+              </span>
+              <div className="flex flex-wrap gap-1.5 pt-0.5">
+                {canTeach.length > 0 ? (
+                  canTeach.map((skill) => (
+                    <span
+                      key={skill}
+                      className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-ok/15 text-ok border border-ok/30 flex items-center gap-1"
+                    >
+                      <span>✓</span> {skill}
+                    </span>
+                  ))
+                ) : (
+                  <span className="text-xs text-muted">No teaching skills selected</span>
+                )}
+              </div>
+            </div>
+
+            {/* Seeking Guidance Display */}
+            <div className="p-3.5 rounded-xl bg-card-alt border border-border/80 space-y-1.5">
+              <span className="text-xs font-bold uppercase tracking-wider text-amber flex items-center gap-1.5">
+                <span>🔍</span> What you are Seeking Guidance in
+              </span>
+              <div className="flex flex-wrap gap-1.5 pt-0.5">
+                {seekingGuidance.length > 0 ? (
+                  seekingGuidance.map((skill) => (
+                    <span
+                      key={skill}
+                      className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-amber/15 text-amber border border-amber/30 flex items-center gap-1"
+                    >
+                      <span>⚡</span> {skill}
+                    </span>
+                  ))
+                ) : (
+                  <span className="text-xs text-muted">No guidance skills selected</span>
+                )}
+              </div>
+            </div>
+          </div>
+        ) : (
+          /* Inline Editor for Can Teach & Seeking Guidance */
+          <div className="space-y-4 pt-3 border-t border-border animate-fade-in">
+            <div className="space-y-2">
+              <label className="text-xs font-bold uppercase tracking-wider text-ok flex items-center gap-1.5">
+                <span>🎓</span> What are you Eligible to Teach / Help? (Click to toggle)
+              </label>
+              <div className="flex flex-wrap gap-2">
+                {MATCH_SKILL_TAGS.map((tag) => {
+                  const isSel = draftCanTeach.includes(tag.id);
+                  return (
+                    <button
+                      key={tag.id}
+                      type="button"
+                      onClick={() => {
+                        setDraftCanTeach(prev =>
+                          prev.includes(tag.id) ? prev.filter(t => t !== tag.id) : [...prev, tag.id]
+                        );
+                      }}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-medium border transition-all cursor-pointer flex items-center gap-1.5 ${
+                        isSel
+                          ? 'border-ok bg-ok/20 text-ok ring-1 ring-ok/40 font-semibold'
+                          : 'border-border bg-card text-muted hover:border-ok/50 hover:text-ink'
+                      }`}
+                    >
+                      <span>{tag.icon}</span>
+                      <span>{tag.label}</span>
+                      {isSel && <span>✓</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-xs font-bold uppercase tracking-wider text-amber flex items-center gap-1.5">
+                <span>🔍</span> What are you Seeking Guidance in? (Click to toggle)
+              </label>
+              <div className="flex flex-wrap gap-2">
+                {MATCH_SKILL_TAGS.map((tag) => {
+                  const isSel = draftSeeking.includes(tag.id);
+                  return (
+                    <button
+                      key={tag.id}
+                      type="button"
+                      onClick={() => {
+                        setDraftSeeking(prev =>
+                          prev.includes(tag.id) ? prev.filter(t => t !== tag.id) : [...prev, tag.id]
+                        );
+                      }}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-medium border transition-all cursor-pointer flex items-center gap-1.5 ${
+                        isSel
+                          ? 'border-amber bg-amber/20 text-amber ring-1 ring-amber/40 font-semibold'
+                          : 'border-border bg-card text-muted hover:border-amber/50 hover:text-ink'
+                      }`}
+                    >
+                      <span>{tag.icon}</span>
+                      <span>{tag.label}</span>
+                      {isSel && <span>✓</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3 pt-2">
+              <button
+                type="button"
+                onClick={handleSaveSkillPreferences}
+                className="px-5 py-2.5 bg-amber hover:bg-terracotta text-white font-bold text-xs rounded-xl transition-all shadow-xs cursor-pointer flex items-center gap-2"
+              >
+                <span>💾</span>
+                <span>Save Skills & Re-calculate Connection Matches</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsEditingSkills(false)}
+                className="px-4 py-2.5 rounded-xl border border-border text-xs font-medium text-muted hover:text-ink cursor-pointer"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* Autonomous Peer-Matching Agent: Live Activity Loop Header */}
       <div className="bg-card border border-border rounded-[22px] p-5 sm:p-6 shadow-xs">
         <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-border">
@@ -788,6 +1050,42 @@ export default function MatchPage() {
                                 Agent Match Rationale:
                               </span>
                               {match.plainExplanation}
+                            </div>
+
+                            {/* What Peer Teaches vs Seeks */}
+                            <div className="my-2.5 grid grid-cols-2 gap-2 text-[11px]">
+                              <div className="p-2 rounded-xl bg-card border border-border">
+                                <span className="text-[10px] font-bold uppercase tracking-wider text-ok block mb-1 flex items-center gap-1">
+                                  <span>🎓</span> They Can Teach:
+                                </span>
+                                <div className="flex flex-wrap gap-1">
+                                  {match.canTeach && match.canTeach.length > 0 ? (
+                                    match.canTeach.map((s) => (
+                                      <span key={s} className="px-1.5 py-0.5 rounded-md bg-ok/10 text-ok border border-ok/20 font-semibold text-[10px]">
+                                        {s}
+                                      </span>
+                                    ))
+                                  ) : (
+                                    <span className="text-muted text-[10px]">{match.primarySkill}</span>
+                                  )}
+                                </div>
+                              </div>
+                              <div className="p-2 rounded-xl bg-card border border-border">
+                                <span className="text-[10px] font-bold uppercase tracking-wider text-amber block mb-1 flex items-center gap-1">
+                                  <span>🔍</span> They Want to Learn:
+                                </span>
+                                <div className="flex flex-wrap gap-1">
+                                  {match.wantsToLearn && match.wantsToLearn.length > 0 ? (
+                                    match.wantsToLearn.map((s) => (
+                                      <span key={s} className="px-1.5 py-0.5 rounded-md bg-amber/10 text-amber border border-amber/20 font-semibold text-[10px]">
+                                        {s}
+                                      </span>
+                                    ))
+                                  ) : (
+                                    <span className="text-muted text-[10px]">Various Skills</span>
+                                  )}
+                                </div>
+                              </div>
                             </div>
 
                             {/* Step 10: Expandable Formula Breakdown */}
