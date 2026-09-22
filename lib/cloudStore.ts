@@ -109,6 +109,11 @@ export interface CloudDailyMission {
   sourceTopic: string;
   completedAt: string | null;
   xpReward: number;
+  challengeTitle?: string;
+  problemStatement?: string;
+  starterCode?: string;
+  solutionHint?: string;
+  submissionCode?: string;
 }
 
 interface CloudStoreData {
@@ -512,14 +517,57 @@ export function getOrCreateDailyMission(userId: string, sourceTopic: string): Cl
   const existing = store.daily_missions[norm].find((m) => m.date === today);
   if (existing) return existing;
 
+  const topicLower = (sourceTopic || 'general').toLowerCase();
+
+  let challengeTitle = `Challenge: Implement ${sourceTopic} Pattern`;
+  let problemStatement = `Write an optimized, production-ready implementation that demonstrates ${sourceTopic}. Handle potential edge cases, prevent race conditions, and follow clean architectural design.`;
+  let starterCode = `// Daily Challenge: ${sourceTopic}\n// Write your solution below and click "Run & Submit"\n\nfunction solution() {\n  // TODO: Implement your logic here\n  return true;\n}\n`;
+  let solutionHint = `Break down the problem into smaller functions and verify edge cases such as empty input or boundaries.`;
+
+  if (topicLower.includes('hook') || topicLower.includes('custom hook')) {
+    challengeTitle = `Build a useDebounce Hook`;
+    problemStatement = `Create a custom React hook 'useDebounce(value, delay)' that returns the debounced value. Ensure it cancels any pending timeout when the value changes or when the component unmounts.`;
+    starterCode = `import { useState, useEffect } from 'react';\n\nexport function useDebounce<T>(value: T, delay: number = 500): T {\n  const [debouncedValue, setDebouncedValue] = useState<T>(value);\n\n  useEffect(() => {\n    // TODO: Set up timer to update debouncedValue after delay\n    const handler = setTimeout(() => {\n      setDebouncedValue(value);\n    }, delay);\n\n    // TODO: Clean up timeout on value change or unmount\n    return () => {\n      clearTimeout(handler);\n    };\n  }, [value, delay]);\n\n  return debouncedValue;\n}\n`;
+    solutionHint = `Use setTimeout inside useEffect, and return a cleanup function with clearTimeout.`;
+  } else if (topicLower.includes('jsx') || topicLower.includes('render') || topicLower.includes('component')) {
+    challengeTitle = `Component Render Profiler with useRef`;
+    problemStatement = `Build a React component or hook that tracks how many times a component renders without causing infinite loops or re-renders itself.`;
+    starterCode = `import React, { useState, useRef, useEffect } from 'react';\n\nexport function RenderCounter() {\n  const [count, setCount] = useState(0);\n  const renderCount = useRef(1);\n\n  useEffect(() => {\n    // TODO: Increment renderCount.current without triggering re-render\n    renderCount.current += 1;\n  });\n\n  return (\n    <div className="p-4 rounded-xl border border-border">\n      <p>State Count: {count}</p>\n      <p>Render Passes: {renderCount.current}</p>\n      <button onClick={() => setCount(c => c + 1)}>Increment</button>\n    </div>\n  );\n}\n`;
+    solutionHint = `useRef persists across renders without triggering a re-render when its .current property changes.`;
+  } else if (topicLower.includes('state') || topicLower.includes('reducer') || topicLower.includes('context')) {
+    challengeTitle = `Undo/Redo State History Reducer`;
+    problemStatement = `Implement a custom reducer or hook that maintains an undo/redo history stack for state transitions.`;
+    starterCode = `export interface HistoryState<T> {\n  past: T[];\n  present: T;\n  future: T[];\n}\n\nexport function historyReducer<T>(state: HistoryState<T>, action: { type: 'SET' | 'UNDO' | 'REDO'; newPresent?: T }): HistoryState<T> {\n  switch (action.type) {\n    case 'UNDO':\n      if (state.past.length === 0) return state;\n      const previous = state.past[state.past.length - 1];\n      return {\n        past: state.past.slice(0, -1),\n        present: previous,\n        future: [state.present, ...state.future],\n      };\n    case 'REDO':\n      if (state.future.length === 0) return state;\n      const next = state.future[0];\n      return {\n        past: [...state.past, state.present],\n        present: next,\n        future: state.future.slice(1),\n      };\n    default:\n      return state;\n  }\n}\n`;
+    solutionHint = `Maintain three pieces of state: past array, present value, and future array.`;
+  } else if (topicLower.includes('oop') || topicLower.includes('class') || topicLower.includes('python')) {
+    challengeTitle = `Thread-Safe Bank Account with Transaction Log`;
+    problemStatement = `Write a BankAccount class with deposit, withdraw, and transaction history. Prevent overdrafts and record timestamps for each ledger entry.`;
+    starterCode = `class BankAccount:\n    def __init__(self, initial_balance=0.0):\n        self.balance = float(initial_balance)\n        self.transactions = []\n\n    def deposit(self, amount):\n        if amount <= 0:\n            raise ValueError("Deposit must be positive")\n        self.balance += amount\n        self.transactions.append(("DEPOSIT", amount, self.balance))\n        return self.balance\n\n    def withdraw(self, amount):\n        if amount > self.balance:\n            raise ValueError("Insufficient funds")\n        self.balance -= amount\n        self.transactions.append(("WITHDRAW", amount, self.balance))\n        return self.balance\n`;
+    solutionHint = `Validate that amounts are positive and enforce that balance never drops below zero.`;
+  } else if (topicLower.includes('async') || topicLower.includes('promise') || topicLower.includes('event loop')) {
+    challengeTitle = `Promise.all Polyfill with Rejection Handling`;
+    problemStatement = `Implement a custom promiseAll(promises) function that resolves an array of promises in parallel, preserving original order, and rejects immediately if any promise fails.`;
+    starterCode = `function promiseAll(promises) {\n  return new Promise((resolve, reject) => {\n    if (!Array.isArray(promises)) return resolve([]);\n    const results = [];\n    let completed = 0;\n    if (promises.length === 0) return resolve(results);\n\n    promises.forEach((p, index) => {\n      Promise.resolve(p)\n        .then((val) => {\n          results[index] = val;\n          completed += 1;\n          if (completed === promises.length) resolve(results);\n        })\n        .catch(reject);\n    });\n  });\n}\n`;
+    solutionHint = `Wrap each element in Promise.resolve(p) to support non-promise primitives, and track completed count.`;
+  } else if (topicLower.includes('stack') || topicLower.includes('array') || topicLower.includes('two-pointer') || topicLower.includes('structures')) {
+    challengeTitle = `Valid Parentheses Syntax Validator`;
+    problemStatement = `Given a string s containing '(', ')', '{', '}', '[' and ']', verify that brackets are closed in the correct order using a Stack.`;
+    starterCode = `function isValidParentheses(s: string): boolean {\n  const stack: string[] = [];\n  const pairs: Record<string, string> = { ')': '(', '}': '{', ']': '[' };\n\n  for (const ch of s) {\n    if (ch === '(' || ch === '{' || ch === '[') {\n      stack.push(ch);\n    } else if (pairs[ch]) {\n      if (stack.pop() !== pairs[ch]) return false;\n    }\n  }\n  return stack.length === 0;\n}\n`;
+    solutionHint = `Push opening brackets onto stack. For closing brackets, check if stack.pop() matches the expected opening bracket.`;
+  }
+
   const newMission: CloudDailyMission = {
     id: 'dm_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
     userId: norm,
     date: today,
-    taskText: `Master ${sourceTopic}: Solve 2 practice challenges & explain concept to a peer`,
+    taskText: `Master ${sourceTopic}: Complete coding challenge & write unit-tested implementation`,
     sourceTopic,
     completedAt: null,
     xpReward: 50,
+    challengeTitle,
+    problemStatement,
+    starterCode,
+    solutionHint,
   };
 
   store.daily_missions[norm].push(newMission);
@@ -527,7 +575,11 @@ export function getOrCreateDailyMission(userId: string, sourceTopic: string): Cl
   return newMission;
 }
 
-export function completeDailyMission(userId: string, missionId: string): { success: boolean; xpEarned: number } {
+export function completeDailyMission(
+  userId: string,
+  missionId: string,
+  submissionCode?: string
+): { success: boolean; xpEarned: number } {
   const store = loadStore();
   const norm = userId.trim().toLowerCase();
   const userMissions = store.daily_missions[norm] || [];
@@ -538,6 +590,9 @@ export function completeDailyMission(userId: string, missionId: string): { succe
   }
 
   mission.completedAt = new Date().toISOString();
+  if (submissionCode) {
+    mission.submissionCode = submissionCode;
+  }
 
   // Add XP to user profile
   const profile = store.profiles[norm];

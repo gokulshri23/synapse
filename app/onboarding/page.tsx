@@ -76,6 +76,17 @@ export default function OnboardingPage() {
     violationsCount: number;
   }) => {
     setQuizScore(result.score);
+    // Set level strictly based on diagnostic performance
+    if (result.score <= 20) {
+      setLevel('0');
+    } else if (result.score < 50) {
+      setLevel('beginner');
+    } else if (result.score < 75) {
+      setLevel('intermediate');
+    } else {
+      setLevel('advanced');
+    }
+
     if (canTeach.length === 0) setCanTeach([domain, 'Problem Solving']);
     if (seekingGuidance.length === 0) setSeeekingGuidance([domain === 'React' ? 'Python' : 'React', 'Algorithms']);
     setStep(3);
@@ -85,14 +96,17 @@ export default function OnboardingPage() {
     e.preventDefault();
 
     const normalizedEmail = (email || localStorage.getItem('synapse_user_email') || 'learner@synapse.edu').trim().toLowerCase();
+    const finalScore = quizScore !== null ? quizScore : (level === '0' ? 0 : 80);
+    const finalLevel = (finalScore <= 20 || level === '0') ? '0' : level;
+
     const studyData = {
       name: name.trim() || 'Learner',
       email: normalizedEmail,
       bio: bio.trim() || 'Excited to learn and collaborate with peers.',
       domain,
-      level,
+      level: finalLevel,
       goal: goal.trim() || '30-day sprint to skill mastery',
-      score: quizScore ?? 80,
+      score: finalScore,
       completed_at: new Date().toISOString(),
       canTeach: canTeach.length > 0 ? canTeach : [domain, 'Problem Solving'],
       seekingGuidance: seekingGuidance.length > 0 ? seekingGuidance : [domain === 'React' ? 'Python' : 'React', 'Algorithms'],
@@ -103,7 +117,13 @@ export default function OnboardingPage() {
     localStorage.setItem(`synapse_study_data_${normalizedEmail}`, JSON.stringify(studyData));
     localStorage.setItem('synapse_user_name', studyData.name);
     localStorage.setItem('synapse_user_email', normalizedEmail);
+
+    // Purge cached roadmap progress so fresh diagnostic tree is generated accurately
+    const userSafe = (normalizedEmail || 'user').toLowerCase().replace(/[^a-z0-9]/g, '_');
+    const domainSafe = (domain || 'react').toLowerCase().replace(/[^a-z0-9]/g, '_');
+    localStorage.removeItem(`synapse_skills_${userSafe}_${domainSafe}`);
     localStorage.removeItem('synapse_skills_progress');
+
     const isDemo = normalizedEmail.includes('demo');
     localStorage.setItem('synapse_demo_active', isDemo ? 'true' : 'false');
     document.cookie = 'synapse_demo_session=true; path=/; max-age=86400';

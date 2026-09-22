@@ -27,7 +27,7 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { userId, missionId } = body;
+    const { userId, missionId, submissionCode } = body;
 
     if (!userId || !missionId) {
       return NextResponse.json(
@@ -36,7 +36,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const result = completeDailyMission(userId, missionId);
+    const result = completeDailyMission(userId, missionId, submissionCode);
     return NextResponse.json({ success: result.success, xpEarned: result.xpEarned });
   } catch (err: any) {
     return NextResponse.json({ success: false, error: err?.message }, { status: 500 });

@@ -1,49 +1,482 @@
 import { Skill, DailyMission } from '@/lib/types';
 
+/**
+ * Authentic Industry-Standard Roadmaps based on roadmap.sh curriculum specifications
+ */
 const TEMPLATES: Record<string, Partial<Skill>[]> = {
   react: [
-    { name: 'JSX Fundamentals', description: 'Core JSX syntax, expressions, and rendering', mastery_pct: 0, level: 1, status: 'active', parent_skill_id: null, order_index: 0 },
-    { name: 'Components & Props', description: 'Functional components, prop types, and composition', mastery_pct: 0, level: 1, status: 'locked', parent_skill_id: null, order_index: 1 },
-    { name: 'State Management', description: 'useState, lifting state, controlled components', mastery_pct: 0, level: 2, status: 'locked', parent_skill_id: null, order_index: 2 },
-    { name: 'Hooks Deep Dive', description: 'useEffect, useRef, useMemo, useCallback, custom hooks', mastery_pct: 0, level: 3, status: 'locked', parent_skill_id: null, order_index: 3 },
-    { name: 'Context & Reducers', description: 'useContext, useReducer, global state patterns', mastery_pct: 0, level: 3, status: 'locked', parent_skill_id: null, order_index: 4 },
-    { name: 'React Router', description: 'Client-side routing, dynamic routes, navigation', mastery_pct: 0, level: 4, status: 'locked', parent_skill_id: null, order_index: 5 },
-    { name: 'Performance', description: 'React.memo, code splitting, Suspense, profiling', mastery_pct: 0, level: 5, status: 'locked', parent_skill_id: null, order_index: 6 },
+    {
+      name: 'Modern JS (ES6+) & DOM Prerequisites',
+      description: 'Arrow functions, destructuring, promises, closures, spread/rest, and browser DOM tree',
+      mastery_pct: 0,
+      level: 1,
+      status: 'active',
+      parent_skill_id: null,
+      order_index: 0,
+    },
+    {
+      name: 'JSX & Rendering Architecture',
+      description: 'Virtual DOM, reconciliation, React.createElement, conditional rendering, and keys',
+      mastery_pct: 0,
+      level: 1,
+      status: 'locked',
+      parent_skill_id: null,
+      order_index: 1,
+    },
+    {
+      name: 'Component Architecture & Props',
+      description: 'Functional components, prop contracts, composition over inheritance, and children props',
+      mastery_pct: 0,
+      level: 2,
+      status: 'locked',
+      parent_skill_id: null,
+      order_index: 2,
+    },
+    {
+      name: 'State Management & Lifecycle',
+      description: 'useState, state batching, immutability, lifting state, controlled form components',
+      mastery_pct: 0,
+      level: 2,
+      status: 'locked',
+      parent_skill_id: null,
+      order_index: 3,
+    },
+    {
+      name: 'Hooks Deep Dive & Custom Hooks',
+      description: 'useEffect lifecycle, useRef DOM references, useMemo, useCallback, and reusable custom hooks',
+      mastery_pct: 0,
+      level: 3,
+      status: 'locked',
+      parent_skill_id: null,
+      order_index: 4,
+    },
+    {
+      name: 'Global State & Context API',
+      description: 'useContext, useReducer patterns, global store architecture, Zustand & Redux Toolkit',
+      mastery_pct: 0,
+      level: 3,
+      status: 'locked',
+      parent_skill_id: null,
+      order_index: 5,
+    },
+    {
+      name: 'Client-Side Routing & Navigation',
+      description: 'React Router v6+, layout routes, dynamic URL parameters, navigation guards',
+      mastery_pct: 0,
+      level: 4,
+      status: 'locked',
+      parent_skill_id: null,
+      order_index: 6,
+    },
+    {
+      name: 'Data Fetching & Server State',
+      description: 'TanStack Query (React Query), SWR, optimistic UI updates, cache invalidation',
+      mastery_pct: 0,
+      level: 4,
+      status: 'locked',
+      parent_skill_id: null,
+      order_index: 7,
+    },
+    {
+      name: 'Full-Stack Next.js & Server Components',
+      description: 'App Router, React Server Components (RSC), SSR/SSG, Server Actions, streaming',
+      mastery_pct: 0,
+      level: 5,
+      status: 'locked',
+      parent_skill_id: null,
+      order_index: 8,
+    },
+    {
+      name: 'Performance Optimization & Profiling',
+      description: 'Code splitting, React.lazy, Suspense, memory leak prevention, Web Vitals profiling',
+      mastery_pct: 0,
+      level: 5,
+      status: 'locked',
+      parent_skill_id: null,
+      order_index: 9,
+    },
   ],
   python: [
-    { name: 'Python Basics', description: 'Variables, data types, operators, I/O', mastery_pct: 0, level: 1, status: 'active', parent_skill_id: null, order_index: 0 },
-    { name: 'Control Flow', description: 'If/else, loops, comprehensions', mastery_pct: 0, level: 1, status: 'locked', parent_skill_id: null, order_index: 1 },
-    { name: 'Functions & Modules', description: 'Defining functions, imports, packages', mastery_pct: 0, level: 2, status: 'locked', parent_skill_id: null, order_index: 2 },
-    { name: 'OOP in Python', description: 'Classes, inheritance, polymorphism, dunder methods', mastery_pct: 0, level: 3, status: 'locked', parent_skill_id: null, order_index: 3 },
-    { name: 'File I/O & Exceptions', description: 'Reading/writing files, error handling, context managers', mastery_pct: 0, level: 3, status: 'locked', parent_skill_id: null, order_index: 4 },
-    { name: 'Libraries & Frameworks', description: 'NumPy, pandas, Flask/Django basics', mastery_pct: 0, level: 4, status: 'locked', parent_skill_id: null, order_index: 5 },
-  ],
-  'machine learning': [
-    { name: 'Math Foundations', description: 'Linear algebra, calculus, probability for ML', mastery_pct: 0, level: 1, status: 'active', parent_skill_id: null, order_index: 0 },
-    { name: 'Data Preprocessing', description: 'Cleaning, normalization, feature engineering', mastery_pct: 0, level: 2, status: 'locked', parent_skill_id: null, order_index: 1 },
-    { name: 'Supervised Learning', description: 'Regression, classification, decision trees, SVM', mastery_pct: 0, level: 3, status: 'locked', parent_skill_id: null, order_index: 2 },
-    { name: 'Model Evaluation', description: 'Cross-validation, metrics, bias-variance tradeoff', mastery_pct: 0, level: 3, status: 'locked', parent_skill_id: null, order_index: 3 },
-    { name: 'Neural Networks', description: 'Perceptrons, backpropagation, deep learning intro', mastery_pct: 0, level: 4, status: 'locked', parent_skill_id: null, order_index: 4 },
+    {
+      name: 'Syntax, Data Types & Control Flow',
+      description: 'Variables, dynamic typing, conditionals, loops (for/while), list & dict comprehensions',
+      mastery_pct: 0,
+      level: 1,
+      status: 'active',
+      parent_skill_id: null,
+      order_index: 0,
+    },
+    {
+      name: 'Data Structures & Collections',
+      description: 'Lists, tuples, dictionaries, sets, collections (Counter, defaultdict, deque), slicing',
+      mastery_pct: 0,
+      level: 1,
+      status: 'locked',
+      parent_skill_id: null,
+      order_index: 1,
+    },
+    {
+      name: 'Functions, Scopes & Decorators',
+      description: 'First-class functions, *args/**kwargs, closures, decorators, lambda functions',
+      mastery_pct: 0,
+      level: 2,
+      status: 'locked',
+      parent_skill_id: null,
+      order_index: 2,
+    },
+    {
+      name: 'Generators, Iterators & Memory',
+      description: 'Iterables protocol, yield expressions, generator pipelines, lazy evaluation',
+      mastery_pct: 0,
+      level: 2,
+      status: 'locked',
+      parent_skill_id: null,
+      order_index: 3,
+    },
+    {
+      name: 'Object-Oriented Programming (OOP)',
+      description: 'Classes, inheritance, polymorphism, encapsulation, dunder methods (__init__, __str__, __repr__)',
+      mastery_pct: 0,
+      level: 3,
+      status: 'locked',
+      parent_skill_id: null,
+      order_index: 4,
+    },
+    {
+      name: 'File I/O, Serialization & Exceptions',
+      description: 'Context managers (with), custom exception hierarchies, JSON, CSV parsing, pickle',
+      mastery_pct: 0,
+      level: 3,
+      status: 'locked',
+      parent_skill_id: null,
+      order_index: 5,
+    },
+    {
+      name: 'Modules, Virtual Envs & Packaging',
+      description: 'Import resolution, __name__ == __main__, pip, virtualenv, pyproject.toml',
+      mastery_pct: 0,
+      level: 4,
+      status: 'locked',
+      parent_skill_id: null,
+      order_index: 6,
+    },
+    {
+      name: 'Concurrency: Asyncio & Multiprocessing',
+      description: 'Global Interpreter Lock (GIL), threading vs multiprocessing, asyncio event loop',
+      mastery_pct: 0,
+      level: 4,
+      status: 'locked',
+      parent_skill_id: null,
+      order_index: 7,
+    },
+    {
+      name: 'Web Frameworks & APIs (FastAPI/Django)',
+      description: 'FastAPI routing, Pydantic type validation, asynchronous endpoints, ORM models',
+      mastery_pct: 0,
+      level: 5,
+      status: 'locked',
+      parent_skill_id: null,
+      order_index: 8,
+    },
+    {
+      name: 'Testing, Typing & Profiling',
+      description: 'pytest suites, mocking, mypy static type checking, cProfile performance analysis',
+      mastery_pct: 0,
+      level: 5,
+      status: 'locked',
+      parent_skill_id: null,
+      order_index: 9,
+    },
   ],
   javascript: [
-    { name: 'Syntax & Basics', description: 'Variables, types, operators, control flow', mastery_pct: 0, level: 1, status: 'active', parent_skill_id: null, order_index: 0 },
-    { name: 'DOM Manipulation', description: 'Selecting, modifying, and creating elements', mastery_pct: 0, level: 2, status: 'locked', parent_skill_id: null, order_index: 1 },
-    { name: 'Async Programming', description: 'Promises, async/await, fetch API', mastery_pct: 0, level: 3, status: 'locked', parent_skill_id: null, order_index: 2 },
-    { name: 'ES6+ Features', description: 'Destructuring, spread, modules, iterators', mastery_pct: 0, level: 3, status: 'locked', parent_skill_id: null, order_index: 3 },
-    { name: 'Advanced Patterns', description: 'Closures, prototypes, design patterns, testing', mastery_pct: 0, level: 4, status: 'locked', parent_skill_id: null, order_index: 4 },
+    {
+      name: 'Variables, Scopes & Memory Model',
+      description: 'var/let/const, temporal dead zone, execution context, call stack, hoisting',
+      mastery_pct: 0,
+      level: 1,
+      status: 'active',
+      parent_skill_id: null,
+      order_index: 0,
+    },
+    {
+      name: 'Data Types, Coercion & Operators',
+      description: 'Primitives vs references, type coercion rules, strict equality, truthy/falsy',
+      mastery_pct: 0,
+      level: 1,
+      status: 'locked',
+      parent_skill_id: null,
+      order_index: 1,
+    },
+    {
+      name: 'Functions, Closures & Lexical Scope',
+      description: 'Higher-order functions, closure retention, IIFEs, recursion, function currying',
+      mastery_pct: 0,
+      level: 2,
+      status: 'locked',
+      parent_skill_id: null,
+      order_index: 2,
+    },
+    {
+      name: 'The "this" Keyword & Object Prototypes',
+      description: 'Explicit binding (call/apply/bind), arrow function lexical this, prototype chain',
+      mastery_pct: 0,
+      level: 2,
+      status: 'locked',
+      parent_skill_id: null,
+      order_index: 3,
+    },
+    {
+      name: 'DOM Manipulation & Event Architecture',
+      description: 'DOM tree traversal, event bubbling, capturing, event delegation, custom events',
+      mastery_pct: 0,
+      level: 3,
+      status: 'locked',
+      parent_skill_id: null,
+      order_index: 4,
+    },
+    {
+      name: 'Asynchronous JS & The Event Loop',
+      description: 'Macrotasks vs microtasks, Promises architecture, async/await, fetch API, abort controller',
+      mastery_pct: 0,
+      level: 3,
+      status: 'locked',
+      parent_skill_id: null,
+      order_index: 5,
+    },
+    {
+      name: 'Modern ES6+ Features & Modules',
+      description: 'Destructuring, rest/spread, Symbol, BigInt, ES Modules (import/export), dynamic imports',
+      mastery_pct: 0,
+      level: 4,
+      status: 'locked',
+      parent_skill_id: null,
+      order_index: 6,
+    },
+    {
+      name: 'Browser Storage & Web APIs',
+      description: 'localStorage, sessionStorage, IndexedDB, Web Workers, Intersection Observer',
+      mastery_pct: 0,
+      level: 4,
+      status: 'locked',
+      parent_skill_id: null,
+      order_index: 7,
+    },
+    {
+      name: 'Error Handling, Debugging & DevTools',
+      description: 'Error classes, try/catch/finally, Chrome DevTools breakpoints, memory profiling',
+      mastery_pct: 0,
+      level: 5,
+      status: 'locked',
+      parent_skill_id: null,
+      order_index: 8,
+    },
+    {
+      name: 'Modern Tooling, Bundlers & TypeScript',
+      description: 'Vite, esbuild, Babel, npm dependencies, static type checking with TypeScript',
+      mastery_pct: 0,
+      level: 5,
+      status: 'locked',
+      parent_skill_id: null,
+      order_index: 9,
+    },
+  ],
+  'machine learning': [
+    {
+      name: 'Mathematics for Machine Learning',
+      description: 'Linear algebra, matrix decomposition, multivariate calculus, probability distributions',
+      mastery_pct: 0,
+      level: 1,
+      status: 'active',
+      parent_skill_id: null,
+      order_index: 0,
+    },
+    {
+      name: 'Data Preprocessing & Exploration',
+      description: 'Pandas data wrangling, missing data imputation, feature scaling, outlier detection',
+      mastery_pct: 0,
+      level: 1,
+      status: 'locked',
+      parent_skill_id: null,
+      order_index: 1,
+    },
+    {
+      name: 'Feature Engineering & Selection',
+      description: 'One-hot encoding, binning, interaction terms, PCA dimensionality reduction',
+      mastery_pct: 0,
+      level: 2,
+      status: 'locked',
+      parent_skill_id: null,
+      order_index: 2,
+    },
+    {
+      name: 'Supervised Learning: Regression',
+      description: 'Linear, Ridge, Lasso regression, gradient descent optimization, MSE/R2 evaluation',
+      mastery_pct: 0,
+      level: 2,
+      status: 'locked',
+      parent_skill_id: null,
+      order_index: 3,
+    },
+    {
+      name: 'Supervised Learning: Classification',
+      description: 'Logistic regression, Decision Trees, Random Forests, SVM, ROC-AUC metrics',
+      mastery_pct: 0,
+      level: 3,
+      status: 'locked',
+      parent_skill_id: null,
+      order_index: 4,
+    },
+    {
+      name: 'Unsupervised Learning & Clustering',
+      description: 'K-Means, hierarchical clustering, DBSCAN, silhouette score, anomaly detection',
+      mastery_pct: 0,
+      level: 3,
+      status: 'locked',
+      parent_skill_id: null,
+      order_index: 5,
+    },
+    {
+      name: 'Model Evaluation & Cross-Validation',
+      description: 'K-Fold cross-validation, hyperparameter tuning, Grid/Random Search, bias-variance',
+      mastery_pct: 0,
+      level: 4,
+      status: 'locked',
+      parent_skill_id: null,
+      order_index: 6,
+    },
+    {
+      name: 'Neural Networks & Deep Learning Intro',
+      description: 'Perceptrons, forward/backpropagation, activation functions (ReLU, Sigmoid), PyTorch',
+      mastery_pct: 0,
+      level: 4,
+      status: 'locked',
+      parent_skill_id: null,
+      order_index: 7,
+    },
+    {
+      name: 'Computer Vision & NLP Foundations',
+      description: 'Convolutional layers (CNNs), tokenization, text embeddings, Transformer attention',
+      mastery_pct: 0,
+      level: 5,
+      status: 'locked',
+      parent_skill_id: null,
+      order_index: 8,
+    },
+    {
+      name: 'MLOps, Serialization & API Serving',
+      description: 'Model saving (ONNX, joblib), FastAPI model serving, pipeline deployment, drift monitoring',
+      mastery_pct: 0,
+      level: 5,
+      status: 'locked',
+      parent_skill_id: null,
+      order_index: 9,
+    },
   ],
   'data structures': [
-    { name: 'Arrays & Strings', description: 'Array operations, string manipulation, two pointers', mastery_pct: 0, level: 1, status: 'active', parent_skill_id: null, order_index: 0 },
-    { name: 'Linked Lists', description: 'Singly/doubly linked lists, fast/slow pointers', mastery_pct: 0, level: 2, status: 'locked', parent_skill_id: null, order_index: 1 },
-    { name: 'Stacks & Queues', description: 'Stack operations, BFS with queues, monotonic stacks', mastery_pct: 0, level: 2, status: 'locked', parent_skill_id: null, order_index: 2 },
-    { name: 'Trees & Graphs', description: 'Binary trees, BST, DFS/BFS, graph traversal', mastery_pct: 0, level: 3, status: 'locked', parent_skill_id: null, order_index: 3 },
-    { name: 'Dynamic Programming', description: 'Memoization, tabulation, common DP patterns', mastery_pct: 0, level: 4, status: 'locked', parent_skill_id: null, order_index: 4 },
+    {
+      name: 'Complexity Analysis (Big-O Notation)',
+      description: 'Time & space complexity, asymptotic bounds, worst/average/best case tradeoffs',
+      mastery_pct: 0,
+      level: 1,
+      status: 'active',
+      parent_skill_id: null,
+      order_index: 0,
+    },
+    {
+      name: 'Arrays, Strings & Two-Pointer Patterns',
+      description: 'Sliding window, prefix sums, two-pointer technique, Kadane’s maximum subarray',
+      mastery_pct: 0,
+      level: 1,
+      status: 'locked',
+      parent_skill_id: null,
+      order_index: 1,
+    },
+    {
+      name: 'Linked Lists & Fast/Slow Pointers',
+      description: 'Singly & doubly linked lists, cycle detection (Floyd’s algorithm), list reversal',
+      mastery_pct: 0,
+      level: 2,
+      status: 'locked',
+      parent_skill_id: null,
+      order_index: 2,
+    },
+    {
+      name: 'Stacks, Queues & Monotonic Structures',
+      description: 'LIFO/FIFO mechanisms, monotonic stacks, next greater element, sliding window maximum',
+      mastery_pct: 0,
+      level: 2,
+      status: 'locked',
+      parent_skill_id: null,
+      order_index: 3,
+    },
+    {
+      name: 'Hash Tables & Collision Resolution',
+      description: 'Hash functions, chaining vs open addressing, frequency counters, amortized O(1)',
+      mastery_pct: 0,
+      level: 3,
+      status: 'locked',
+      parent_skill_id: null,
+      order_index: 4,
+    },
+    {
+      name: 'Recursion & Backtracking Algorithms',
+      description: 'Call stack tracing, subsets generation, permutations, N-Queens problem',
+      mastery_pct: 0,
+      level: 3,
+      status: 'locked',
+      parent_skill_id: null,
+      order_index: 5,
+    },
+    {
+      name: 'Trees & Binary Search Trees (BST)',
+      description: 'Pre/In/Post-order traversals, level-order (BFS), BST search/insert, lowest common ancestor',
+      mastery_pct: 0,
+      level: 4,
+      status: 'locked',
+      parent_skill_id: null,
+      order_index: 6,
+    },
+    {
+      name: 'Heaps & Priority Queues',
+      description: 'Min/Max binary heaps, heapify operations, Top-K frequent elements, Dijkstra prep',
+      mastery_pct: 0,
+      level: 4,
+      status: 'locked',
+      parent_skill_id: null,
+      order_index: 7,
+    },
+    {
+      name: 'Graphs & Network Traversal',
+      description: 'Adjacency list representations, BFS/DFS, topological sorting, connected components',
+      mastery_pct: 0,
+      level: 5,
+      status: 'locked',
+      parent_skill_id: null,
+      order_index: 8,
+    },
+    {
+      name: 'Dynamic Programming & Memoization',
+      description: 'Overlapping subproblems, 1D/2D table DP, 0/1 Knapsack, Longest Common Subsequence',
+      mastery_pct: 0,
+      level: 5,
+      status: 'locked',
+      parent_skill_id: null,
+      order_index: 9,
+    },
   ],
 };
 
-export function generateSkillTree(domain: string, levelInput?: string | number): Skill[] {
+/**
+ * Generates an authentic Skill Tree strictly tailored to assessed score and level.
+ * When the user scores 0% (or has level 0), Sector 1 starts at 0% and ALL subsequent sectors are LOCKED.
+ */
+export function generateSkillTree(
+  domain: string,
+  levelInput?: string | number,
+  scoreInput?: number
+): Skill[] {
   const key = domain ? domain.toLowerCase().trim() : 'react';
-  
+
   // Find best matching template
   let template = TEMPLATES[key];
   if (!template) {
@@ -55,7 +488,7 @@ export function generateSkillTree(domain: string, levelInput?: string | number):
     else template = TEMPLATES.react;
   }
 
-  // Parse level (0 = No knowledge, 1 = Beginner, 2 = Elementary, 3 = Intermediate, 4 = Advanced, 5 = Expert)
+  // Parse level and enforce diagnostic score authority
   let numericLevel = 0;
   if (typeof levelInput === 'number') {
     numericLevel = Math.max(0, Math.min(5, levelInput));
@@ -63,14 +496,28 @@ export function generateSkillTree(domain: string, levelInput?: string | number):
     const match = levelInput.match(/\d+/);
     if (match) {
       numericLevel = parseInt(match[0], 10);
+    } else if (levelInput.toLowerCase().includes('advanced') || levelInput.toLowerCase().includes('expert')) {
+      numericLevel = 4;
     } else if (levelInput.toLowerCase().includes('intermediate')) {
       numericLevel = 3;
-    } else if (levelInput.toLowerCase().includes('advanced')) {
-      numericLevel = 4;
-    } else if (levelInput.toLowerCase().includes('expert')) {
-      numericLevel = 5;
     } else if (levelInput.toLowerCase().includes('beginner')) {
       numericLevel = 1;
+    } else {
+      numericLevel = 0;
+    }
+  }
+
+  // CRITICAL FIX: If user attempted diagnostic quiz and got 0% (or < 25%),
+  // force Level 0! Sector 1 starts at 0% and NOTHING else is unlocked!
+  if (typeof scoreInput === 'number') {
+    if (scoreInput <= 15) {
+      numericLevel = 0;
+    } else if (scoreInput < 45) {
+      numericLevel = Math.min(1, numericLevel);
+    } else if (scoreInput < 70) {
+      numericLevel = Math.min(2, numericLevel);
+    } else if (scoreInput < 85) {
+      numericLevel = Math.min(3, numericLevel);
     }
   }
 
@@ -79,21 +526,25 @@ export function generateSkillTree(domain: string, levelInput?: string | number):
     let mastery = 0;
 
     if (numericLevel === 0) {
-      // Level 0: Completely fresh, first topic is active at 0%
+      // Level 0: Completely fresh. Topic 0 is active at initial score (or 0%).
+      // All other topics are strictly locked!
       if (i === 0) {
         status = 'active';
-        mastery = 0;
+        mastery = typeof scoreInput === 'number' && scoreInput > 0 ? scoreInput : 0;
       } else {
         status = 'locked';
         mastery = 0;
       }
     } else if (i < numericLevel) {
+      // Prior topics are mastered
       status = 'mastered';
-      mastery = 90 + Math.min(10, (i + 1) * 2);
+      mastery = 85 + Math.min(15, (i + 1) * 3);
     } else if (i === numericLevel) {
+      // Current active topic frontier
       status = 'active';
-      mastery = 25;
+      mastery = typeof scoreInput === 'number' && scoreInput > 0 ? Math.min(45, scoreInput) : 20;
     } else {
+      // Future topics are locked
       status = 'locked';
       mastery = 0;
     }
@@ -105,7 +556,7 @@ export function generateSkillTree(domain: string, levelInput?: string | number):
       mastery_pct: mastery,
       level: s.level ?? (i + 1),
       status,
-      parent_skill_id: i > 0 ? null : null,
+      parent_skill_id: null,
       description: s.description || '',
       order_index: s.order_index ?? i,
     };
@@ -113,24 +564,32 @@ export function generateSkillTree(domain: string, levelInput?: string | number):
 }
 
 export function generateDailyMission(skills: Skill[]): DailyMission {
-  const activeSkills = skills.filter(s => s.status === 'active' && s.mastery_pct < 85);
+  const activeSkills = skills.filter((s) => s.status === 'active' && s.mastery_pct < 85);
   const focus = activeSkills.length > 0 ? activeSkills[0] : skills[0];
   const missions = [
-    { title: 'Implement a Custom Hook', desc: 'Create a useLocalStorage hook. Focus on type safety and error handling.' },
-    { title: 'Debug the Broken Component', desc: 'Fix the 3 bugs in the provided component and write a test case.' },
-    { title: 'Refactor to Composition', desc: 'Refactor the monolithic component into 3 smaller, reusable components.' },
-    { title: 'Build a Mini Feature', desc: 'Implement a search filter with debouncing and loading states.' },
-    { title: 'Code Review Challenge', desc: 'Review the provided pull request and write constructive feedback.' },
+    {
+      title: `Implement ${focus.name} Pattern`,
+      desc: `Write a robust implementation demonstrating ${focus.name}. Focus on architectural clarity, error handling, and clean typing.`,
+    },
+    {
+      title: `Debug & Optimize ${focus.name}`,
+      desc: `Refactor an unoptimized ${focus.name} implementation to improve performance and prevent common edge-case bugs.`,
+    },
+    {
+      title: `Peer Code Review: ${focus.name}`,
+      desc: `Review and annotate a simulated peer implementation of ${focus.name} providing 3 actionable architectural improvements.`,
+    },
   ];
-  const mission = missions[Math.floor(Date.now() / 86400000) % missions.length];
+
+  const selected = missions[Math.floor(Math.random() * missions.length)];
   return {
-    id: `mission-${Date.now()}`,
+    id: crypto.randomUUID(),
     user_id: '',
-    title: mission.title,
-    description: `${mission.desc} Focus area: ${focus?.name || 'General Practice'}.`,
+    title: selected.title,
+    description: selected.desc,
     xp_reward: 50,
     completed: false,
-    skill_name: focus?.name || 'General',
+    skill_name: focus.name,
     date: new Date().toISOString().split('T')[0],
   };
 }
