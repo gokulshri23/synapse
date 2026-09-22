@@ -241,7 +241,7 @@ export default function OnboardingPage() {
           {/* STEP 2: Domain Selection & Proctored Quiz */}
           {step === 2 && (
             <div className="space-y-6 animate-fade-in">
-              {!quizStarted ? (
+              {!showConsentScreen && !quizStarted ? (
                 <div className="space-y-5">
                   <div>
                     <h2 className="text-2xl font-serif font-bold text-ink">Choose your primary skill domain</h2>
