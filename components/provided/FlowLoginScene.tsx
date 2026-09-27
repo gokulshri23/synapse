@@ -312,20 +312,8 @@ export default function FlowLoginScene() {
         </div>
 
         {/* Footer info */}
-        <div className="relative z-10 flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--muted)] pt-2 border-t border-[var(--border)]/60">
-          <div className="flex items-center gap-3">
-            <span>&copy; {new Date().getFullYear()} Synapse</span>
-            <a
-              href="/SYNAPSE_JURY_PITCH_AND_PROJECT_GUIDE.pdf"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-[var(--amber)] hover:underline font-semibold flex items-center gap-1 cursor-pointer"
-              title="Read official hackathon pitch & architecture dossier"
-            >
-              <span>📄</span>
-              <span>Jury Pitch Dossier (PDF)</span>
-            </a>
-          </div>
+        <div className="relative z-10 flex items-center justify-between text-xs text-[var(--muted)] pt-2 border-t border-[var(--border)]/60">
+          <span>&copy; {new Date().getFullYear()} Synapse Learning Platform</span>
           <span className="flex items-center gap-1.5 text-[var(--ok)] font-medium">
             <span className="w-2 h-2 rounded-full bg-[var(--ok)] inline-block animate-pulse" />
             System Live

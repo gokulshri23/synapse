@@ -126,19 +126,6 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           </div>
 
           <div className="flex items-center gap-2 sm:gap-3">
-            {/* Jury Pitch Dossier PDF Quick Button */}
-            <a
-              href="/SYNAPSE_JURY_PITCH_AND_PROJECT_GUIDE.pdf"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-bold rounded-xl bg-amber/15 hover:bg-amber/25 text-amber border border-amber/30 transition-all cursor-pointer shadow-xs active:scale-95 shrink-0"
-              title="View or Download Official Hackathon Jury Pitch Dossier (PDF)"
-            >
-              <span>📄</span>
-              <span className="hidden sm:inline">Jury Pitch</span>
-              <span className="text-[10px] px-1 py-0.2 rounded bg-amber text-white font-bold">PDF</span>
-            </a>
-
             <ThemeToggle />
             <div className="relative">
               <button
@@ -154,20 +141,11 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               </button>
 
             {menuOpen && (
-              <div className="absolute right-0 mt-2 w-56 bg-card border border-border rounded-2xl shadow-xl py-2 z-50 animate-fade-in">
+              <div className="absolute right-0 mt-2 w-52 bg-card border border-border rounded-2xl shadow-xl py-2 z-50 animate-fade-in">
                 <div className="px-4 py-2 border-b border-border">
                   <p className="text-xs font-semibold text-ink truncate">{profile?.full_name || 'Learner'}</p>
                   <p className="text-[11px] text-muted truncate">{profile?.email || 'learner@synapse.edu'}</p>
                 </div>
-                <a
-                  href="/SYNAPSE_JURY_PITCH_AND_PROJECT_GUIDE.pdf"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="block px-4 py-2 text-sm text-amber font-semibold hover:bg-amber/10 transition-colors flex items-center gap-2"
-                >
-                  <span>📄</span>
-                  <span>Jury Pitch & Guide (PDF)</span>
-                </a>
                 <Link
                   href="/app/settings"
                   onClick={() => setMenuOpen(false)}
