@@ -48,6 +48,12 @@ export default function DailyPrebuiltCall({
   const [connectionState, setConnectionState] = useState<string>('connecting');
   const [participantsCount, setParticipantsCount] = useState<number>(1);
   const [callDuration, setCallDuration] = useState<number>(0);
+  const callDurationRef = useRef<number>(0);
+  const onEndCallRef = useRef(onEndCall);
+
+  useEffect(() => {
+    onEndCallRef.current = onEndCall;
+  }, [onEndCall]);
 
   // Participant track states for ?calldebug=1
   const [localParticipantState, setLocalParticipantState] = useState<ParticipantDebugState>({
@@ -68,7 +74,13 @@ export default function DailyPrebuiltCall({
 
   // Call timer
   useEffect(() => {
-    const timer = setInterval(() => setCallDuration((d) => d + 1), 1000);
+    const timer = setInterval(() => {
+      setCallDuration((d) => {
+        const next = d + 1;
+        callDurationRef.current = next;
+        return next;
+      });
+    }, 1000);
     return () => clearInterval(timer);
   }, []);
 
@@ -193,7 +205,9 @@ export default function DailyPrebuiltCall({
       jitsiApiRef.current = api;
 
       // Event handlers
+      let hasJoined = false;
       api.addListener('videoConferenceJoined', (event: any) => {
+        hasJoined = true;
         setIsLoading(false);
         setConnectionState('connected');
         setParticipantsCount(1);
@@ -207,50 +221,16 @@ export default function DailyPrebuiltCall({
         });
       });
 
-      api.addListener('participantJoined', (event: any) => {
-        setParticipantsCount((c) => Math.max(2, c + 1));
-        setRemoteParticipantState({
-          name: event.displayName || peerName || 'Remote Peer',
-          isLocal: false,
-          audioTrackState: 'live',
-          videoTrackState: 'live',
-          screenShareState: 'none',
-          audioLevel: 60,
-        });
-      });
-
-      api.addListener('participantLeft', () => {
-        setParticipantsCount(1);
-        setRemoteParticipantState(null);
-      });
-
-      api.addListener('audioMuteStatusChanged', (event: any) => {
-        setLocalParticipantState((prev) => ({
-          ...prev,
-          audioTrackState: event.muted ? 'muted' : 'live',
-        }));
-      });
-
-      api.addListener('videoMuteStatusChanged', (event: any) => {
-        setLocalParticipantState((prev) => ({
-          ...prev,
-          videoTrackState: event.muted ? 'muted' : 'live',
-        }));
-      });
-
-      api.addListener('screenSharingStatusChanged', (event: any) => {
-        setLocalParticipantState((prev) => ({
-          ...prev,
-          screenShareState: event.on ? 'sharing' : 'none',
-        }));
-      });
-
       api.addListener('readyToClose', () => {
-        onEndCall(callDuration);
+        if (hasJoined) {
+          onEndCallRef.current(callDurationRef.current);
+        }
       });
 
       api.addListener('videoConferenceLeft', () => {
-        onEndCall(callDuration);
+        if (hasJoined) {
+          onEndCallRef.current(callDurationRef.current);
+        }
       });
 
     } catch (err: any) {
@@ -261,7 +241,7 @@ export default function DailyPrebuiltCall({
     } finally {
       frameCreatingRef.current = false;
     }
-  }, [roomName, mode, currentUserName, currentUserEmail, peerName, onEndCall, callDuration, loadJitsiScript]);
+  }, [roomName, mode, currentUserName, currentUserEmail, peerName, loadJitsiScript]);
 
   // ─── Initialize Daily Prebuilt Frame ──────────────────────────
   const setupDailyFrame = useCallback(async (audioOnlyFallback = false) => {
@@ -433,7 +413,7 @@ export default function DailyPrebuiltCall({
     } finally {
       frameCreatingRef.current = false;
     }
-  }, [isDailyHosted, setupJitsiCall, roomUrl, token, mode, currentUserName, peerName, onEndCall, callDuration]);
+  }, [isDailyHosted, setupJitsiCall, roomUrl, token, mode, currentUserName, peerName]);
 
   // Mount effect with React StrictMode guard
   useEffect(() => {
@@ -446,14 +426,14 @@ export default function DailyPrebuiltCall({
       if (isMounted) {
         setIsLoading(false);
       }
-    }, 8000); // Give Jitsi more time to load
+    }, 8000); // Give Jitsi time to load
 
     return () => {
       isMounted = false;
       clearTimeout(watchdog);
       destroyCallFrame();
     };
-  }, [setupDailyFrame, destroyCallFrame]);
+  }, [roomName, roomUrl, mode]);
 
   // ─── Retry Handler ───────────────────────────────────────────
   const handleRetry = (audioOnly = false) => {

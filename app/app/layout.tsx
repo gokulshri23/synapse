@@ -143,7 +143,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       } catch (e) {}
     };
 
-    const interval = setInterval(checkIncomingCalls, 3000);
+    const interval = setInterval(checkIncomingCalls, 1200);
     return () => clearInterval(interval);
   }, [pathname, profile?.email]);
 

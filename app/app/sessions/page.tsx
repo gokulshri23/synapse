@@ -451,7 +451,15 @@ function useAsync(asyncFn) {
                 isReal: true,
               };
             });
-            setAcceptedFriends(friends);
+            setAcceptedFriends((prev) => {
+              if (
+                prev.length === friends.length &&
+                prev.every((f, idx) => f.connectionId === friends[idx]?.connectionId && f.friendEmail === friends[idx]?.friendEmail)
+              ) {
+                return prev;
+              }
+              return friends;
+            });
 
             if (friends.length > 0) {
               setActivePeer((prev) => {
@@ -462,6 +470,14 @@ function useAsync(asyncFn) {
                     f.friendName.toLowerCase() === prev.name.toLowerCase()
                 );
                 if (matched) {
+                  if (
+                    prev.id === matched.friendEmail &&
+                    prev.name === matched.friendName &&
+                    prev.connectionId === matched.connectionId &&
+                    prev.isReal === true
+                  ) {
+                    return prev;
+                  }
                   return {
                     id: matched.friendEmail,
                     name: matched.friendName,
@@ -473,6 +489,14 @@ function useAsync(asyncFn) {
                 }
                 if (prev.isAiTutor) return prev;
                 const chosen = friends[0];
+                if (
+                  prev.id === chosen.friendEmail &&
+                  prev.name === chosen.friendName &&
+                  prev.connectionId === chosen.connectionId &&
+                  prev.isReal === true
+                ) {
+                  return prev;
+                }
                 try {
                   const saved = {
                     id: chosen.friendEmail,
@@ -502,6 +526,9 @@ function useAsync(asyncFn) {
                 const pendingIn = incomingList[0];
                 setActivePeer((prev) => {
                   if (prev.isAiTutor) return prev;
+                  if (prev.id === pendingIn.requesterId && prev.connectionId === pendingIn.id) {
+                    return prev;
+                  }
                   const pName = pendingIn.requesterName || 'Peer';
                   return {
                     id: pendingIn.requesterId,
@@ -517,6 +544,9 @@ function useAsync(asyncFn) {
                 const pendingOne = outgoingList[0];
                 setActivePeer((prev) => {
                   if (prev.isAiTutor) return prev;
+                  if (prev.id === pendingOne.recipientId && prev.connectionId === pendingOne.id) {
+                    return prev;
+                  }
                   if (prev.id === 'peer-live' || prev.name.includes('Waiting')) {
                     const pName = pendingOne.recipientName || 'Peer';
                     return {
@@ -659,8 +689,18 @@ function useAsync(asyncFn) {
             status: 'sent' as const,
           }));
 
-          setMessages(loaded);
-          setTimeout(() => scrollToBottom(true), 60);
+          setMessages((prev) => {
+            if (
+              prev.length === loaded.length &&
+              prev.length > 0 &&
+              prev[prev.length - 1]?.id === loaded[loaded.length - 1]?.id &&
+              prev[prev.length - 1]?.text === loaded[loaded.length - 1]?.text
+            ) {
+              return prev;
+            }
+            setTimeout(() => scrollToBottom(true), 60);
+            return loaded;
+          });
         }
       }
     } catch (e) {}
@@ -799,7 +839,7 @@ function useAsync(asyncFn) {
     };
 
     pollCalls();
-    const interval = setInterval(pollCalls, 2000);
+    const interval = setInterval(pollCalls, 1000);
 
     const supabase = createClient();
     const myClean = (studentEmail || studentName || '').replace(/[^a-zA-Z0-9_-]/g, '_');
