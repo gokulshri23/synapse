@@ -49,6 +49,7 @@ export default function SettingsPage() {
   }, []);
 
   const [skillDeclarations, setSkillDeclarations] = useState<any[]>([]);
+  const [teachingStats, setTeachingStats] = useState<Record<string, { sessions: number; avg_improvement: number }>>({});
   const [newSkillName, setNewSkillName] = useState('');
   const [newSkillIntent, setNewSkillIntent] = useState('teach');
   const [isAddingSkill, setIsAddingSkill] = useState(false);
@@ -67,6 +68,22 @@ export default function SettingsPage() {
       if (cdRes.ok) {
         const cdData = await cdRes.json();
         setCooldownRemaining(cdData.blocked ? cdData.remainingHours : null);
+      }
+
+      // Fetch Section 2 Teaching Stats (sessions & avg deltas)
+      const statsRes = await fetch(`/api/teaching-stats?userId=${encodeURIComponent(email)}`);
+      if (statsRes.ok) {
+        const statsData = await statsRes.json();
+        const map: Record<string, { sessions: number; avg_improvement: number }> = {};
+        if (Array.isArray(statsData.stats)) {
+          statsData.stats.forEach((st: any) => {
+            map[st.skill.toLowerCase()] = {
+              sessions: st.sessions,
+              avg_improvement: st.avg_improvement,
+            };
+          });
+        }
+        setTeachingStats(map);
       }
     } catch (e) {}
   };
@@ -387,12 +404,12 @@ export default function SettingsPage() {
         </div>
       </div>
 
-      {/* Verified Skills Section */}
-      <div className="bg-card border border-border rounded-[22px] p-6 shadow-xs space-y-4">
+      {/* Verified Skills Section: Separated into Teach and Learn */}
+      <div className="bg-card border border-border rounded-[22px] p-6 shadow-xs space-y-6">
         <div className="flex justify-between items-start">
           <div>
-            <h2 className="text-lg font-serif font-bold text-ink mb-1">Verified Skills</h2>
-            <p className="text-xs text-muted mb-4">Manage the skills you want to teach or learn.</p>
+            <h2 className="text-lg font-serif font-bold text-ink mb-1">Skill Declarations</h2>
+            <p className="text-xs text-muted">Manage skills you can teach and skills you want to learn independently.</p>
           </div>
           {cooldownRemaining !== null && (
             <span className="px-3 py-1 bg-amber/10 text-amber border border-amber/25 rounded-full text-xs font-bold">
@@ -401,44 +418,204 @@ export default function SettingsPage() {
           )}
         </div>
 
+        {/* Section 1: Skills I Can Teach (Teaching Level & Evidence Deltas) */}
         <div className="space-y-3">
-          {skillDeclarations.map((skill, idx) => (
-            <div key={idx} className="flex items-center justify-between p-3.5 bg-card-alt rounded-xl border border-border">
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-bold text-ink">{skill.skillName}</span>
-                  {skill.status === 'verified' && <span className="text-ok text-xs font-bold">✓</span>}
-                  {skill.status === 'pending' && <span className="text-amber text-xs font-bold">⏱</span>}
-                  {skill.status === 'rejected' && <span className="text-bad text-xs font-bold">✗</span>}
-                </div>
-                <div className="flex items-center gap-2 mt-1">
-                  <span className="text-[11px] text-muted flex items-center gap-1">
-                    {skill.intent === 'teach' ? '📖 Teach' : '🎯 Learn'}
-                  </span>
-                  {skill.verifiedLevel && (
-                    <span className="text-[11px] text-amber font-bold flex items-center">
-                      Lvl {skill.verifiedLevel} {'★'.repeat(skill.verifiedLevel)}
-                    </span>
-                  )}
-                  {skill.quizScore !== undefined && skill.quizScore !== null && (
-                    <span className="text-[11px] text-muted">
-                      Score: {skill.quizScore}%
-                    </span>
-                  )}
-                </div>
-              </div>
-            </div>
-          ))}
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-bold text-ink flex items-center gap-1.5">
+              <span>📖</span> Teaching Level &amp; Credentials
+            </h3>
+            <span className="text-[11px] font-semibold text-muted bg-card-alt px-2 py-0.5 rounded-md border border-border">
+              {skillDeclarations.filter((s) => s.intent === 'teach').length} active
+            </span>
+          </div>
+
+          <div className="space-y-2">
+            {skillDeclarations.filter((s) => s.intent === 'teach').length === 0 ? (
+              <p className="text-xs text-muted italic bg-card-alt/50 p-3 rounded-xl border border-dashed border-border">
+                No teaching skills declared yet. Add skills you can mentor peers in.
+              </p>
+            ) : (
+              skillDeclarations
+                .filter((s) => s.intent === 'teach')
+                .map((skill, idx) => {
+                  const stat = teachingStats[skill.skillName.toLowerCase()];
+                  const sessions = stat?.sessions || 0;
+                  const avgDelta = stat?.avg_improvement || 0;
+
+                  // Section 2: Teaching Level: Not verified / Peer Helper / Teacher (verification only)
+                  const teachingLevel =
+                    skill.status !== 'verified'
+                      ? 'Not verified'
+                      : (skill.verifiedLevel || 1) >= 3
+                      ? 'Teacher'
+                      : 'Peer Helper';
+
+                  // Section 2: Teaching evidence deltas:
+                  // After >= 3 sessions as teacher: "Learners improved +24 points on average (5 sessions)"
+                  // Before 3 sessions: "Building evidence" (Do NOT show deltas before 3 sessions — too noisy)
+                  const teachingEvidence =
+                    sessions >= 3
+                      ? `Learners improved ${avgDelta >= 0 ? '+' : ''}${avgDelta} points on average (${sessions} sessions)`
+                      : 'Building evidence';
+
+                  return (
+                    <div key={idx} className="p-3.5 bg-card-alt rounded-xl border border-border space-y-2">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-bold text-ink">{skill.skillName}</span>
+                          <span
+                            className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                              teachingLevel === 'Teacher'
+                                ? 'bg-amber/15 text-amber border border-amber/30'
+                                : teachingLevel === 'Peer Helper'
+                                ? 'bg-ok/15 text-ok border border-ok/30'
+                                : 'bg-muted/15 text-muted border border-border'
+                            }`}
+                          >
+                            Teaching: {teachingLevel}
+                          </span>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            try {
+                              await fetch('/api/skill-declarations', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                  action: 'toggle',
+                                  userId: email,
+                                  skillName: skill.skillName,
+                                  intent: 'teach',
+                                }),
+                              });
+                              fetchSkillDeclarations();
+                              showToast(`Removed ${skill.skillName} from teaching skills.`);
+                            } catch (e) {}
+                          }}
+                          className="text-xs text-muted hover:text-bad px-2 py-1 rounded transition-colors"
+                          title="Remove skill"
+                        >
+                          ✕
+                        </button>
+                      </div>
+
+                      {/* Teaching Evidence Delta */}
+                      <div className="flex items-center gap-2 text-[11px] text-muted bg-card px-2.5 py-1.5 rounded-lg border border-border/60">
+                        <span className="text-amber">📈</span>
+                        <span className="font-medium text-ink">{teachingEvidence}</span>
+                        {sessions > 0 && sessions < 3 && (
+                          <span className="text-[10px] text-muted">({sessions}/3 sessions completed)</span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+            )}
+          </div>
+        </div>
+
+        {/* Section 2: Skills I Want to Learn (Learning Level 0-5 Scale) */}
+        <div className="space-y-3 pt-2 border-t border-border">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-bold text-ink flex items-center gap-1.5">
+              <span>🎯</span> Learning Level (0–5 Mastery Scale)
+            </h3>
+            <span className="text-[11px] font-semibold text-muted bg-card-alt px-2 py-0.5 rounded-md border border-border">
+              {skillDeclarations.filter((s) => s.intent === 'learn').length} active
+            </span>
+          </div>
+
+          <div className="space-y-2">
+            {skillDeclarations.filter((s) => s.intent === 'learn').length === 0 ? (
+              <p className="text-xs text-muted italic bg-card-alt/50 p-3 rounded-xl border border-dashed border-border">
+                No learning goals declared yet. Add skills you want to study.
+              </p>
+            ) : (
+              skillDeclarations
+                .filter((s) => s.intent === 'learn')
+                .map((skill, idx) => {
+                  // Learning Level: 0–5 scale (driven by proctored quiz, topic mastery, peer sessions)
+                  const rawScore = skill.quizScore ?? studyScore ?? 75;
+                  const learningLevel = Math.min(5, Math.max(0, Math.floor(rawScore / 20)));
+
+                  return (
+                    <div key={idx} className="p-3.5 bg-card-alt rounded-xl border border-border space-y-2">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-bold text-ink">{skill.skillName}</span>
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber/10 text-amber border border-amber/20">
+                            Learning Level: {learningLevel} / 5
+                          </span>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            try {
+                              await fetch('/api/skill-declarations', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                  action: 'toggle',
+                                  userId: email,
+                                  skillName: skill.skillName,
+                                  intent: 'learn',
+                                }),
+                              });
+                              fetchSkillDeclarations();
+                              showToast(`Removed ${skill.skillName} from learning goals.`);
+                            } catch (e) {}
+                          }}
+                          className="text-xs text-muted hover:text-bad px-2 py-1 rounded transition-colors"
+                          title="Remove skill"
+                        >
+                          ✕
+                        </button>
+                      </div>
+
+                      {/* 0-5 scale step indicator */}
+                      <div className="flex items-center gap-1.5 pt-1">
+                        {[1, 2, 3, 4, 5].map((lvl) => (
+                          <div
+                            key={lvl}
+                            className={`h-1.5 flex-1 rounded-full transition-all ${
+                              lvl <= learningLevel ? 'bg-amber' : 'bg-border'
+                            }`}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })
+            )}
+          </div>
         </div>
 
         {!isAddingSkill ? (
-          <button
-            type="button"
-            onClick={() => setIsAddingSkill(true)}
-            className="w-full py-3 bg-card-alt hover:bg-border/30 border border-dashed border-border text-ink font-semibold rounded-xl text-xs transition-colors cursor-pointer"
-          >
-            + Add New Skill
-          </button>
+          <div className="flex gap-2 pt-2">
+            <button
+              type="button"
+              onClick={() => {
+                setNewSkillIntent('teach');
+                setIsAddingSkill(true);
+              }}
+              className="flex-1 py-2.5 bg-card-alt hover:bg-border/30 border border-dashed border-border text-ink font-semibold rounded-xl text-xs transition-colors cursor-pointer text-center"
+            >
+              + Add Teaching Skill
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setNewSkillIntent('learn');
+                setIsAddingSkill(true);
+              }}
+              className="flex-1 py-2.5 bg-card-alt hover:bg-border/30 border border-dashed border-border text-ink font-semibold rounded-xl text-xs transition-colors cursor-pointer text-center"
+            >
+              + Add Learning Skill
+            </button>
+          </div>
         ) : (
           <form onSubmit={handleAddSkill} className="p-4 bg-card-alt rounded-xl border border-border space-y-3">
             <div className="space-y-1.5">
@@ -447,7 +624,7 @@ export default function SettingsPage() {
                 type="text"
                 value={newSkillName}
                 onChange={(e) => setNewSkillName(e.target.value)}
-                placeholder="e.g. React, Python"
+                placeholder="e.g. React, Python, Machine Learning"
                 required
                 className="w-full p-2.5 rounded-lg bg-card border border-border text-ink text-sm outline-none focus:border-amber focus:ring-1 focus:ring-amber/20"
               />
@@ -456,12 +633,24 @@ export default function SettingsPage() {
               <label className="text-xs font-semibold uppercase tracking-wider text-muted">Intent</label>
               <div className="flex gap-4">
                 <label className="flex items-center gap-2 text-sm text-ink cursor-pointer">
-                  <input type="radio" value="teach" checked={newSkillIntent === 'teach'} onChange={(e) => setNewSkillIntent(e.target.value)} className="text-amber accent-amber" />
-                  📖 Teach
+                  <input
+                    type="radio"
+                    value="teach"
+                    checked={newSkillIntent === 'teach'}
+                    onChange={(e) => setNewSkillIntent(e.target.value)}
+                    className="text-amber accent-amber"
+                  />
+                  📖 Skills I Can Teach
                 </label>
                 <label className="flex items-center gap-2 text-sm text-ink cursor-pointer">
-                  <input type="radio" value="learn" checked={newSkillIntent === 'learn'} onChange={(e) => setNewSkillIntent(e.target.value)} className="text-amber accent-amber" />
-                  🎯 Learn
+                  <input
+                    type="radio"
+                    value="learn"
+                    checked={newSkillIntent === 'learn'}
+                    onChange={(e) => setNewSkillIntent(e.target.value)}
+                    className="text-amber accent-amber"
+                  />
+                  🎯 Skills I Want to Learn
                 </label>
               </div>
             </div>
@@ -469,7 +658,11 @@ export default function SettingsPage() {
               <button type="submit" className="py-2 px-4 bg-amber hover:bg-terracotta text-white rounded-lg text-xs font-bold transition-colors cursor-pointer">
                 Save
               </button>
-              <button type="button" onClick={() => setIsAddingSkill(false)} className="py-2 px-4 bg-card hover:bg-border text-ink rounded-lg text-xs font-bold transition-colors cursor-pointer border border-border">
+              <button
+                type="button"
+                onClick={() => setIsAddingSkill(false)}
+                className="py-2 px-4 bg-card hover:bg-border text-ink rounded-lg text-xs font-bold transition-colors cursor-pointer border border-border"
+              >
                 Cancel
               </button>
             </div>

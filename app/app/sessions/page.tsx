@@ -4,6 +4,9 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import PreJoinModal from '@/components/call/PreJoinModal';
 import StudyRoomView from '@/components/call/StudyRoomView';
 import NativeCallView from '@/components/call/NativeCallView';
+import { createClient } from '@/lib/supabase/client';
+import SessionSummaryCard from '@/components/adaptive/SessionSummaryCard';
+import WhyThisModal from '@/components/adaptive/WhyThisModal';
 
 // ─── Types ────────────────────────────────────────────────────
 interface ChatMessage {
@@ -16,6 +19,7 @@ interface ChatMessage {
   voiceDataUrl?: string;
   reactions?: string[];
   flagged?: boolean;
+  status?: 'sending' | 'sent' | 'failed';
 }
 
 interface ChallengeRubric {
@@ -44,18 +48,84 @@ interface AgentActivityLog {
 // ─── Component ────────────────────────────────────────────────
 export default function SessionsPage() {
   // User state
-  const [studentTrack, setStudentTrack] = useState('React');
-  const [studentName, setStudentName] = useState('Learner');
-  const [studentEmail, setStudentEmail] = useState('');
-  const [userXp, setUserXp] = useState(350);
+  const [studentTrack, setStudentTrack] = useState(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('synapse_study_data');
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (parsed.domain) return parsed.domain;
+        }
+      } catch (e) {}
+    }
+    return 'React';
+  });
+  const [studentName, setStudentName] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const name = localStorage.getItem('synapse_user_name');
+      if (name) return name;
+      try {
+        const saved = localStorage.getItem('synapse_study_data');
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (parsed.name) return parsed.name;
+        }
+      } catch (e) {}
+    }
+    return 'Learner';
+  });
+  const [studentEmail, setStudentEmail] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const email = localStorage.getItem('synapse_user_email');
+      if (email) return email;
+      try {
+        const saved = localStorage.getItem('synapse_study_data');
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (parsed.email) return parsed.email;
+        }
+      } catch (e) {}
+    }
+    return '';
+  });
+  const [userXp, setUserXp] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const xp = localStorage.getItem('synapse_user_xp');
+      if (xp) return parseInt(xp, 10);
+    }
+    return 350;
+  });
 
   // Active peer
-  const [activePeer, setActivePeer] = useState({
-    id: 'peer-default',
-    name: 'Peer Partner',
-    initials: 'PP',
-    skill: 'React Track',
-    isReal: false
+  const [activePeer, setActivePeer] = useState<{
+    id: string;
+    name: string;
+    initials: string;
+    skill: string;
+    isReal?: boolean;
+  }>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const savedPeer = localStorage.getItem('synapse_active_peer');
+        if (savedPeer) {
+          const p = JSON.parse(savedPeer);
+          return {
+            id: p.id || 'peer-live',
+            name: p.name || 'Peer Partner',
+            initials: p.name ? p.name.split(' ').map((n: string) => n[0]).join('').slice(0, 2) : 'PP',
+            skill: p.domain || p.offers?.[0] || 'Peer Learning',
+            isReal: Boolean(p.isReal),
+          };
+        }
+      } catch (e) {}
+    }
+    return {
+      id: 'peer-live',
+      name: 'Waiting for Peer...',
+      initials: '👥',
+      skill: 'Multi-Device Ready',
+      isReal: false,
+    };
   });
 
   const [isConnectionAccepted, setIsConnectionAccepted] = useState(true);
@@ -68,7 +138,18 @@ export default function SessionsPage() {
   const [peerSubmitted, setPeerSubmitted] = useState(false);
 
   // ─── Part H: Persistent Chat Messages ─────────────────────────
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const last = localStorage.getItem('synapse_last_chat_messages');
+        if (last) {
+          const parsed = JSON.parse(last);
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        }
+      } catch (e) {}
+    }
+    return [];
+  });
   const [input, setInput] = useState('');
   const [isPeerTyping, setIsPeerTyping] = useState(false);
   const [showNewMsgIndicator, setShowNewMsgIndicator] = useState(false);
@@ -138,11 +219,14 @@ function useAsync(asyncFn) {
   const [postCallSubmitted, setPostCallSubmitted] = useState(false);
 
   // Live Call Signaling & Incoming Ringing
+  const [activeCallSessionId, setActiveCallSessionId] = useState<string>('');
+  const [isCallInitiator, setIsCallInitiator] = useState<boolean>(false);
   const [incomingCall, setIncomingCall] = useState<{
     callerId: string;
     callerName: string;
     callUrl: string;
     callMode: 'voice' | 'video';
+    callSessionId?: string;
     messageId: string;
   } | null>(null);
   const dismissedCallIdsRef = useRef<Set<string>>(new Set());
@@ -181,18 +265,19 @@ function useAsync(asyncFn) {
   const [videoQuizAnswers, setVideoQuizAnswers] = useState<number[]>([]);
   const [videoQuizResult, setVideoQuizResult] = useState<{ score: number; reason?: string } | null>(null);
 
+  // Section 6: Chat AI Controls & Safe Video Watch Gate
+  const [assistantSuppressedUntil, setAssistantSuppressedUntil] = useState<number>(0);
+  const [assistantDisabledForSession, setAssistantDisabledForSession] = useState<boolean>(false);
+  const [videoWatchSeconds, setVideoWatchSeconds] = useState<number>(0);
+  const [isVideoEnded, setIsVideoEnded] = useState<boolean>(false);
+
   // ─── Part 7: Autonomous Agent Activity Feed ───────────────────
   const [isActivityDrawerOpen, setIsActivityDrawerOpen] = useState(false);
   const [activityLogs, setActivityLogs] = useState<AgentActivityLog[]>([]);
 
   // ─── Part 7: End-of-Session AI Summary ────────────────────────
   const [showSummaryModal, setShowSummaryModal] = useState(false);
-  const [sessionSummary, setSessionSummary] = useState<{
-    summary: string;
-    strengths: string[];
-    weakTopics: string[];
-    roadmapUpdated: boolean;
-  } | null>(null);
+  const [sessionSummary, setSessionSummary] = useState<any | null>(null);
   const [isGeneratingSummary, setIsGeneratingSummary] = useState(false);
 
   const showToast = (msg: string) => {
@@ -325,34 +410,134 @@ function useAsync(asyncFn) {
       }).catch(() => {});
     }
 
-    // Part H: Load persisted messages on mount
-    fetch('/api/peer-network?sessionId=global_collab')
-      .then((res) => res.json())
-      .then((data) => {
+    // Message history is loaded via thread-based fetchThreadMessages below
+  }, []);
+
+  // ─── Part H / BUG 5: Thread Messages Persistence & Realtime ───
+  const currentThreadId = activeStudyRoom?.room?.id
+    ? `room__${activeStudyRoom.room.id}`
+    : `pair__${[(studentEmail || studentName || 'learner').trim().toLowerCase(), (activePeer.id || activePeer.name || 'peer').trim().toLowerCase()].sort().join('__')}`;
+
+  // Synchronize messages to local storage whenever they change
+  useEffect(() => {
+    if (messages.length > 0 && typeof window !== 'undefined') {
+      try {
+        localStorage.setItem('synapse_last_chat_messages', JSON.stringify(messages));
+        if (currentThreadId) {
+          localStorage.setItem('synapse_chat_' + currentThreadId, JSON.stringify(messages));
+        }
+      } catch (e) {}
+    }
+  }, [messages, currentThreadId]);
+
+  const fetchThreadMessages = useCallback(async (tId: string) => {
+    if (!tId) return;
+
+    // Immediately restore cached thread messages if state is currently empty
+    if (typeof window !== 'undefined') {
+      try {
+        const cached = localStorage.getItem('synapse_chat_' + tId) || localStorage.getItem('synapse_last_chat_messages');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setMessages((prev) => (prev.length === 0 ? parsed : prev));
+          }
+        }
+      } catch (e) {}
+    }
+
+    try {
+      const res = await fetch('/api/messages?threadId=' + encodeURIComponent(tId) + '&limit=50');
+      if (res.ok) {
+        const data = await res.json();
         if (Array.isArray(data.messages) && data.messages.length > 0) {
+          const myEmailLower = (studentEmail || studentName || '').trim().toLowerCase();
           const loaded: ChatMessage[] = data.messages.map((m: any) => ({
             id: m.id,
-            text: m.text,
-            sender: (m.senderId || '').trim().toLowerCase() === currentEmail.trim().toLowerCase() ? 'me' as const : 'peer' as const,
-            time: m.timestamp || 'Now',
-            senderName: m.senderName,
+            text: m.content || m.text || '',
+            sender: (m.sender_email || m.senderId || '').trim().toLowerCase() === myEmailLower ? ('me' as const) : ('peer' as const),
+            time: m.created_at ? new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Now',
+            senderName: m.sender_name || m.senderName,
             type: m.type || 'text',
-            voiceDataUrl: m.voiceDataUrl,
+            voiceDataUrl: m.voice_url || m.voiceDataUrl,
             reactions: m.reactions || [],
             flagged: m.flagged || false,
+            status: 'sent' as const,
           }));
           setMessages(loaded);
-          setTimeout(() => scrollToBottom(true), 100);
+          setTimeout(() => scrollToBottom(true), 60);
         }
-      })
-      .catch(() => {});
-  }, [scrollToBottom]);
+      }
+    } catch (e) {}
+  }, [studentEmail, studentName, scrollToBottom]);
 
-  // ─── Real-time Message Polling & Study Assistant ───────────
+  useEffect(() => {
+    if (!currentThreadId) return;
+    fetchThreadMessages(currentThreadId);
+
+    // Periodic backup sync (fallback if websocket disconnected)
+    const pollInterval = setInterval(() => {
+      fetchThreadMessages(currentThreadId);
+    }, 3000);
+
+    // Supabase Realtime INSERT subscription
+    const supabase = createClient();
+    const channel = supabase
+      .channel('realtime_thread_' + currentThreadId)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'messages',
+          filter: 'thread_id=eq.' + currentThreadId,
+        },
+        (payload: any) => {
+          const m = payload.new;
+          if (!m) return;
+          const myEmailLower = (studentEmail || studentName || '').trim().toLowerCase();
+          const isFromMe = (m.sender_email || '').trim().toLowerCase() === myEmailLower;
+
+          setMessages((prev) => {
+            const existingIdx = prev.findIndex(
+              (ex) => ex.id === m.id || (isFromMe && ex.status === 'sending' && ex.text === m.content)
+            );
+            const formatted: ChatMessage = {
+              id: m.id,
+              text: m.content || '',
+              sender: isFromMe ? ('me' as const) : ('peer' as const),
+              time: m.created_at ? new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Now',
+              senderName: m.sender_name || (isFromMe ? studentName : activePeer.name),
+              type: m.type || 'text',
+              voiceDataUrl: m.voice_url,
+              reactions: [],
+              flagged: false,
+              status: 'sent' as const,
+            };
+
+            if (existingIdx !== -1) {
+              const updated = [...prev];
+              updated[existingIdx] = formatted;
+              return updated;
+            }
+            setTimeout(() => scrollToBottom(), 50);
+            return [...prev, formatted];
+          });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      clearInterval(pollInterval);
+      supabase.removeChannel(channel);
+    };
+  }, [currentThreadId, fetchThreadMessages, studentEmail, studentName, activePeer.name, scrollToBottom]);
+
+  // ─── Real-time Signaling & Peer Events Polling ─────────────
   useEffect(() => {
     let isSubscribed = true;
 
-    const pollMessages = async () => {
+    const pollPeerEvents = async () => {
       try {
         const res = await fetch('/api/peer-network?sessionId=global_collab');
         if (res.ok && isSubscribed) {
@@ -379,63 +564,27 @@ function useAsync(asyncFn) {
                 callerName: latestInvite.senderName || activePeer.name || 'Peer Partner',
                 callUrl: latestInvite.callUrl,
                 callMode: latestInvite.callMode || 'video',
+                callSessionId: latestInvite.callSessionId,
                 messageId: latestInvite.id,
               });
             } else if (!latestInvite && incomingCall) {
               setIncomingCall(null);
             }
 
-            setMessages(prev => {
-              const existingIds = new Set(prev.map(m => m.id));
-
-              const newIncoming = data.messages
-                .filter((m: any) => {
-                  if (existingIds.has(m.id)) return false;
-                  const senderLower = (m.senderId || '').trim().toLowerCase();
-                  if (myEmailLower && senderLower === myEmailLower) return false;
-                  return true;
-                })
-                .map((m: any) => ({
-                  id: m.id,
-                  text: m.text,
-                  sender: 'peer' as const,
-                  time: m.timestamp || 'Now',
-                  senderName: m.senderName,
-                  type: m.type || 'text',
-                  voiceDataUrl: m.voiceDataUrl,
-                  reactions: m.reactions || [],
-                  flagged: m.flagged || false,
-                }));
-
-              if (newIncoming.length > 0) {
-                const latest = newIncoming[newIncoming.length - 1];
-                if (latest.senderName && latest.senderName !== activePeer.name) {
-                  setActivePeer(p => ({
-                    ...p,
-                    name: latest.senderName || p.name,
-                    initials: latest.senderName ? latest.senderName.split(' ').map((n: string) => n[0]).join('').slice(0, 2) : p.initials,
-                    isReal: true
-                  }));
-                }
-
-                // Check for peer submitted trigger
-                if (latest.text.includes('submitted the collaborative challenge')) {
-                  setPeerSubmitted(true);
-                }
-
-                setTimeout(() => scrollToBottom(), 50);
-                return [...prev, ...newIncoming];
+            // Check for peer submitted trigger
+            data.messages.forEach((m: any) => {
+              if (m.text && m.text.includes('submitted the collaborative challenge')) {
+                setPeerSubmitted(true);
               }
-              return prev;
             });
           }
         }
       } catch (e) {}
     };
 
-    const interval = setInterval(pollMessages, 1500);
+    const interval = setInterval(pollPeerEvents, 1500);
     return () => { isSubscribed = false; clearInterval(interval); };
-  }, [studentEmail, activePeer.name, isCallModalOpen, incomingCall, scrollToBottom]);
+  }, [studentEmail, activePeer.name, isCallModalOpen, incomingCall]);
 
   // ─── Incoming Call Audio Ring Chime ───────────────────────────
   useEffect(() => {
@@ -481,24 +630,65 @@ function useAsync(asyncFn) {
     return () => clearInterval(interval);
   }, []);
 
-  // ─── Study Rooms Fetching & Polling ───────────────────────────
+  // ─── Study Rooms Fetching & Realtime Merge (BUG 3) ────────────
+  const mergeStudyRooms = useCallback((incomingRooms: any[]) => {
+    setStudyRooms((prev) => {
+      const map = new Map<string, any>();
+      prev.forEach((r) => {
+        if (r && r.id && r.status !== 'ended') {
+          map.set(r.id, r);
+        }
+      });
+      incomingRooms.forEach((r) => {
+        if (r && r.id) {
+          if (r.status === 'ended') {
+            map.delete(r.id);
+          } else {
+            map.set(r.id, r);
+          }
+        }
+      });
+      return Array.from(map.values()).filter((r) => r.status === 'live' || r.status === 'waiting');
+    });
+  }, []);
+
   const fetchStudyRooms = useCallback(async () => {
     try {
       const res = await fetch('/api/study-rooms?action=list');
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data.rooms)) {
-          setStudyRooms(data.rooms);
+          mergeStudyRooms(data.rooms);
         }
       }
     } catch (e) {}
-  }, []);
+  }, [mergeStudyRooms]);
 
   useEffect(() => {
     fetchStudyRooms();
     const interval = setInterval(fetchStudyRooms, 4000);
-    return () => clearInterval(interval);
-  }, [fetchStudyRooms]);
+
+    const supabase = createClient();
+    const channel = supabase
+      .channel('realtime_study_rooms')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'study_rooms' },
+        (payload: any) => {
+          if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+            if (payload.new) mergeStudyRooms([payload.new]);
+          } else if (payload.eventType === 'DELETE') {
+            setStudyRooms((prev) => prev.filter((r) => r.id !== payload.old?.id));
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      clearInterval(interval);
+      supabase.removeChannel(channel);
+    };
+  }, [fetchStudyRooms, mergeStudyRooms]);
 
   const handleCreateStudyRoom = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -590,8 +780,31 @@ function useAsync(asyncFn) {
     }
   };
 
-  // ─── Study Assistant Check Trigger ──────────────────────────
+  // ─── Study Assistant Check Trigger & Student Controls ──────
+  useEffect(() => {
+    if (!showVideoModal || isVideoEnded) return;
+
+    const timer = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        setVideoWatchSeconds((prev) => {
+          const next = prev + 1;
+          // When video reaches 300s (5m), immediately unmount to prevent YouTube related videos
+          if (next >= 300) {
+            setIsVideoEnded(true);
+          }
+          return next;
+        });
+      }
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [showVideoModal, isVideoEnded]);
+
   const triggerStudyAssistantCheck = async (recentMsgs: ChatMessage[]) => {
+    // Student controls: check session toggle and 10-minute cooldown
+    if (assistantDisabledForSession) return;
+    if (Date.now() < assistantSuppressedUntil) return;
+
     try {
       const sId = getSessionId();
       const res = await fetch('/api/study-assistant', {
@@ -630,8 +843,10 @@ function useAsync(asyncFn) {
               postQuiz: data.postQuiz || [],
               message: data.message
             });
-            setShowVideoModal(true);
+            setVideoWatchSeconds(0);
+            setIsVideoEnded(false);
             setVideoWatched(false);
+            setShowVideoModal(true);
             setVideoQuizAnswers(new Array((data.postQuiz || []).length).fill(-1));
           }
         }
@@ -750,10 +965,23 @@ function useAsync(asyncFn) {
             senderName: studentName,
             type: 'voice',
             voiceDataUrl: base64,
+            status: 'sent',
           };
           setMessages(prev => [...prev, voiceMsg]);
 
           try {
+            await fetch('/api/messages', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                threadId: currentThreadId,
+                content: '🎤 Voice message',
+                senderName: studentName,
+                senderEmail: studentEmail || studentName,
+                type: 'voice',
+                voiceUrl: base64,
+              }),
+            });
             await fetch('/api/voice-message', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -784,36 +1012,86 @@ function useAsync(asyncFn) {
     }
   };
 
-  // ─── Send Text Message ──────────────────────────────────────
-  const handleSendMessage = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!input.trim()) return;
+  // ─── Send Text Message (BUG 5: Optimistic + Retry) ────────────
+  const handleSendMessage = async (e?: React.FormEvent, retryMsg?: ChatMessage) => {
+    if (e) e.preventDefault();
+    const textToSend = retryMsg ? retryMsg.text : input.trim();
+    if (!textToSend) return;
 
+    const tempId = retryMsg ? retryMsg.id : 'msg_' + Date.now();
     const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const userText = input.trim();
-    const userMsg: ChatMessage = {
-      id: 'msg_' + Date.now(), text: userText, sender: 'me', time,
-      senderName: studentName, type: 'text',
-    };
-    const nextMsgs = [...messages, userMsg];
-    setMessages(nextMsgs);
-    setInput('');
+    const mySenderId = (studentEmail || studentName || 'learner').trim().toLowerCase();
 
-    // Persist to backend
-    const mySenderId = (studentEmail || 'user_' + studentName).trim().toLowerCase();
+    const optimisticMsg: ChatMessage = {
+      id: tempId,
+      text: textToSend,
+      sender: 'me',
+      time,
+      senderName: studentName,
+      type: 'text',
+      status: 'sending',
+    };
+
+    if (!retryMsg) {
+      setMessages((prev) => [...prev, optimisticMsg]);
+      setInput('');
+      setTimeout(() => scrollToBottom(), 50);
+    } else {
+      setMessages((prev) => prev.map((m) => (m.id === tempId ? { ...m, status: 'sending' } : m)));
+    }
+
+    try {
+      const res = await fetch('/api/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          threadId: currentThreadId,
+          content: textToSend,
+          senderName: studentName,
+          senderEmail: mySenderId,
+          type: 'text',
+        }),
+      });
+
+      if (!res.ok) {
+        throw new Error('Failed to send message');
+      }
+
+      const data = await res.json();
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === tempId
+            ? {
+                ...m,
+                id: data.message?.id || tempId,
+                status: 'sent',
+              }
+            : m
+        )
+      );
+    } catch (err) {
+      setMessages((prev) =>
+        prev.map((m) => (m.id === tempId ? { ...m, status: 'failed' } : m))
+      );
+    }
+
+    // Persist to peer-network buffer for backward compatibility & signaling
     try {
       fetch('/api/peer-network', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          type: 'message', sessionId: 'global_collab',
-          senderId: mySenderId, senderName: studentName, text: userText
-        })
-      });
+          type: 'message',
+          sessionId: 'global_collab',
+          senderId: mySenderId,
+          senderName: studentName,
+          text: textToSend,
+        }),
+      }).catch(() => {});
     } catch (e) {}
 
     // Check study assistant for confusion signals
-    triggerStudyAssistantCheck(nextMsgs);
+    triggerStudyAssistantCheck([...messages, optimisticMsg]);
 
     // AI peer response for demo/AI peers
     if (!activePeer.isReal || activePeer.name.includes('Demo') || activePeer.name.includes('Waiting')) {
@@ -823,23 +1101,37 @@ function useAsync(asyncFn) {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            message: userText, userCode: codeSnippet,
-            track: studentTrack, peerName: activePeer.name.replace(' (Demo Peer)', '')
-          })
+            message: textToSend,
+            userCode: codeSnippet,
+            track: studentTrack,
+            peerName: activePeer.name.replace(' (Demo Peer)', ''),
+          }),
         });
         if (res.ok) {
           const data = await res.json();
-          setTimeout(() => {
+          setTimeout(async () => {
             setIsPeerTyping(false);
-            setMessages(prev => [...prev, {
-              id: 'peer_' + Date.now(),
-              text: data.reply || "Looks great! Let's submit the solution to the evaluation agent.",
-              sender: 'peer', time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-              senderName: activePeer.name, type: 'text',
-            }]);
+            const peerReply = data.reply || "Looks great! Let's submit the solution to the evaluation agent.";
+            try {
+              await fetch('/api/messages', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  threadId: currentThreadId,
+                  content: peerReply,
+                  senderName: activePeer.name,
+                  senderEmail: 'ai_copilot@synapse.edu',
+                  type: 'text',
+                }),
+              });
+            } catch (e) {}
           }, 900);
-        } else { setIsPeerTyping(false); }
-      } catch (err) { setIsPeerTyping(false); }
+        } else {
+          setIsPeerTyping(false);
+        }
+      } catch (err) {
+        setIsPeerTyping(false);
+      }
     }
   };
 
@@ -944,13 +1236,19 @@ function useAsync(asyncFn) {
 
   // ─── Part 6: Live Voice / Video Calls ─────────────────────────
   const handleStartCall = async (mode: 'voice' | 'video') => {
+    const myId = (studentEmail || studentName || 'user').trim().toLowerCase();
+    const peerId = (activePeer.id || activePeer.name || 'peer').trim().toLowerCase();
+    const deterministicCallSessionId = 'call__' + [myId, peerId].sort().join('__');
+    setActiveCallSessionId(deterministicCallSessionId);
+    setIsCallInitiator(true);
+
     setCallConnecting(true);
     setCallMode(mode);
     setCallTimeout(false);
     setIsCallModalOpen(true);
 
     try {
-      const sId = getSessionId();
+      const sId = deterministicCallSessionId;
       const res = await fetch('/api/call-token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -980,6 +1278,7 @@ function useAsync(asyncFn) {
         body: JSON.stringify({
           type: 'call_invite',
           sessionId: 'global_collab',
+          callSessionId: deterministicCallSessionId,
           senderId: studentEmail || studentName,
           senderName: studentName || 'Peer Partner',
           callUrl: data.callUrl,
@@ -1021,11 +1320,46 @@ function useAsync(asyncFn) {
 
   const handleAcceptIncomingCall = () => {
     if (!incomingCall) return;
+    const callerId = incomingCall.callerId;
+    const callerName = incomingCall.callerName;
+    const myId = (studentEmail || studentName || 'user').trim().toLowerCase();
+    const deterministicCallSessionId =
+      incomingCall.callSessionId ||
+      'call__' + [myId, callerId.trim().toLowerCase()].sort().join('__');
+
+    // Synchronize active peer so both participants point to each other
+    setActivePeer({
+      id: callerId,
+      name: callerName,
+      initials: callerName
+        ? callerName
+            .split(' ')
+            .map((n: string) => n[0])
+            .join('')
+            .slice(0, 2)
+        : 'PP',
+      skill: studentTrack + ' Track',
+      isReal: true,
+    });
+    try {
+      localStorage.setItem(
+        'synapse_active_peer',
+        JSON.stringify({
+          id: callerId,
+          name: callerName,
+          domain: studentTrack,
+          isReal: true,
+        })
+      );
+    } catch (e) {}
+
+    setActiveCallSessionId(deterministicCallSessionId);
+    setIsCallInitiator(false);
     setCallUrl(incomingCall.callUrl);
     setCallMode(incomingCall.callMode);
     setIsCallModalOpen(true);
     setIncomingCall(null);
-    showToast(`Connected to live ${incomingCall.callMode} call with ${incomingCall.callerName}!`);
+    showToast(`Connected to live ${incomingCall.callMode} call with ${callerName}!`);
   };
 
   const handleDeclineIncomingCall = () => {
@@ -1066,13 +1400,27 @@ function useAsync(asyncFn) {
       });
       const data = await res.json();
       setVideoQuizResult({ score, reason: data.adaptationReason });
-      if (score >= 60) {
+
+      // Post-video verification: 3 MCQs. If score < 70%, trigger Adaptive Engine
+      if (score >= 70) {
         const nextXp = userXp + 30;
         setUserXp(nextXp);
         localStorage.setItem('synapse_user_xp', nextXp.toString());
         showToast(`🎉 Video quiz passed (${score}%)! +30 XP.`);
       } else {
-        showToast(`Video quiz scored ${score}%. The system will adapt your study plan.`);
+        // Trigger Adaptive Engine for remediation
+        fetch('/api/adaptive-engine', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'evaluate',
+            userId: studentEmail || studentName,
+            skill: studentTrack,
+            topic: studentTrack,
+            score,
+          }),
+        }).catch(() => {});
+        showToast(`Video quiz scored ${score}% (< 70%). Adaptive engine has scheduled targeted remediation.`);
       }
     } catch (e) {
       setVideoQuizResult({ score });
@@ -1090,10 +1438,13 @@ function useAsync(asyncFn) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           userId: studentEmail || studentName,
+          peerId: activePeer.id || activePeer.name,
           peerName: activePeer.name,
           topic: studentTrack,
+          skill: studentTrack,
           preScore,
           postScore,
+          durationMinutes: 25,
           messages,
           challengeTitle,
           codeSolution: codeSnippet,
@@ -1226,15 +1577,18 @@ function useAsync(asyncFn) {
         key={m.id}
         className={'flex flex-col max-w-[85%] group ' + (isMe ? 'items-end ml-auto' : 'items-start mr-auto')}
       >
-        <span className="text-[10px] text-muted mb-1 px-1">
+        <span className="text-[10px] text-muted mb-1 px-1 flex items-center gap-1.5">
           {isAI ? m.senderName : (isMe ? studentName : m.senderName || activePeer.name)} {'\u2022'} {m.time}
+          {isMe && m.status === 'sending' && (
+            <span className="text-[9px] text-amber animate-pulse">sending...</span>
+          )}
         </span>
 
         <div className={'relative p-3.5 rounded-2xl text-xs sm:text-sm leading-relaxed shadow-xs ' +
           (isAI
             ? 'bg-gradient-to-br from-blue-50 to-indigo-50 dark:from-blue-950/30 dark:to-indigo-950/30 border border-blue-200/50 dark:border-blue-800/30 text-ink rounded-bl-xs'
             : isMe
-              ? 'bg-amber text-white rounded-br-xs font-medium'
+              ? (m.status === 'failed' ? 'bg-bad/10 border border-bad text-ink rounded-br-xs font-medium' : 'bg-amber text-white rounded-br-xs font-medium')
               : 'bg-card-alt border border-border text-ink rounded-bl-xs')
         }>
           {isAI && (
@@ -1252,6 +1606,20 @@ function useAsync(asyncFn) {
             <span className="whitespace-pre-wrap">{m.text}</span>
           )}
         </div>
+
+        {/* Failed to send / Retry button (BUG 5) */}
+        {isMe && m.status === 'failed' && (
+          <div className="flex items-center gap-1.5 mt-1 px-1">
+            <span className="text-[10px] text-bad font-semibold">Failed to send.</span>
+            <button
+              type="button"
+              onClick={() => handleSendMessage(undefined, m)}
+              className="text-[10px] text-amber hover:underline font-bold cursor-pointer"
+            >
+              Retry
+            </button>
+          </div>
+        )}
 
         {/* Part D: Action buttons on hover (only for peer messages) */}
         {!isMe && !isAI && !isSystem && !isVoice && (
@@ -1736,31 +2104,88 @@ function useAsync(asyncFn) {
               </div>
             </div>
 
-            {/* Study Assistant Status Banner (Part 5 Requirement) */}
+            {/* Study Assistant Status Banner (Section 6 Controls) */}
             <div className="px-4 py-2 bg-blue-50/60 dark:bg-blue-950/20 border-b border-blue-100 dark:border-blue-900/30 flex items-center justify-between text-[11px] text-blue-700 dark:text-blue-300 shrink-0">
               <div className="flex items-center gap-2">
-                <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-ping" />
-                <span className="font-medium">AI study assistant is on for this chat</span>
+                <span className={`w-1.5 h-1.5 rounded-full ${assistantDisabledForSession ? 'bg-muted' : 'bg-blue-500 animate-ping'}`} />
+                <span className="font-medium">
+                  {assistantDisabledForSession
+                    ? 'AI study assistant switched off for this session'
+                    : Date.now() < assistantSuppressedUntil
+                    ? 'AI study assistant paused (cooldown active)'
+                    : 'AI study assistant is active for this chat'}
+                </span>
               </div>
-              <span className="text-[10px] text-muted">Autonomous Co-Pilot</span>
+              <div className="flex items-center gap-2">
+                {assistantDisabledForSession ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAssistantDisabledForSession(false);
+                      showToast('AI Study Assistant re-enabled.');
+                    }}
+                    className="text-[10px] text-blue-600 hover:underline font-bold cursor-pointer"
+                  >
+                    Turn back on
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAssistantDisabledForSession(true);
+                      showToast('AI Study Assistant switched off for this session.');
+                    }}
+                    className="text-[10px] text-muted hover:text-ink cursor-pointer"
+                  >
+                    Switch off for session
+                  </button>
+                )}
+              </div>
             </div>
 
-            {/* Tier 1 Voice Call Suggestion Bubble (Part 5) */}
-            {tier1VoicePrompt && (
-              <div className="mx-4 mt-3 p-3 bg-amber/10 border border-amber/30 rounded-xl flex items-center justify-between gap-3 animate-slide-down shrink-0">
-                <div className="flex items-center gap-2">
-                  <span className="text-xl">📞</span>
-                  <p className="text-xs text-ink">{tier1VoicePrompt}</p>
+            {/* Tier 1 Voice Call Suggestion Bubble (Section 6 Escalation & Controls) */}
+            {tier1VoicePrompt && !assistantDisabledForSession && (
+              <div className="mx-4 mt-3 p-3 bg-amber/10 border border-amber/30 rounded-xl space-y-2 animate-slide-down shrink-0">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xl">📞</span>
+                    <p className="text-xs text-ink">{tier1VoicePrompt}</p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setTier1VoicePrompt(null);
+                      handleStartCall('voice');
+                    }}
+                    className="text-xs px-3 py-1.5 bg-amber hover:bg-terracotta text-white font-bold rounded-lg shrink-0 cursor-pointer shadow-xs"
+                  >
+                    Start voice call
+                  </button>
                 </div>
-                <button
-                  onClick={() => {
-                    setTier1VoicePrompt(null);
-                    handleStartCall('voice');
-                  }}
-                  className="text-xs px-3 py-1.5 bg-amber hover:bg-terracotta text-white font-bold rounded-lg shrink-0 cursor-pointer shadow-xs"
-                >
-                  Start voice call
-                </button>
+                {/* Student Controls: Not now & Switch off */}
+                <div className="flex items-center justify-end gap-3 pt-1 border-t border-amber/20 text-[11px]">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAssistantSuppressedUntil(Date.now() + 10 * 60 * 1000);
+                      setTier1VoicePrompt(null);
+                      showToast('AI Study Assistant paused for 10 minutes.');
+                    }}
+                    className="text-muted hover:text-ink font-medium cursor-pointer"
+                  >
+                    Not now (10m)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAssistantDisabledForSession(true);
+                      setTier1VoicePrompt(null);
+                      showToast('AI Study Assistant switched off for this session.');
+                    }}
+                    className="text-muted hover:text-bad font-medium cursor-pointer"
+                  >
+                    Switch off for session
+                  </button>
+                </div>
               </div>
             )}
 
@@ -2056,7 +2481,8 @@ function useAsync(asyncFn) {
               currentUserName={studentName}
               currentUserEmail={studentEmail}
               peerEmail={activePeer.id}
-              sessionId={getSessionId()}
+              sessionId={activeCallSessionId || getSessionId()}
+              isInitiator={isCallInitiator}
               onEndCall={handleEndCall}
             />
           </div>
@@ -2101,52 +2527,115 @@ function useAsync(asyncFn) {
         </div>
       )}
 
-      {/* ─── Part 5: Tier 3 Curated Video Modal ───────────────────── */}
+      {/* ─── Section 6: Tier 3 Safe Educational Video Modal ─────────── */}
       {showVideoModal && tier3Video && (
         <div className="fixed inset-0 z-[120] bg-ink/75 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
           <div className="bg-card border border-border rounded-[24px] max-w-3xl w-full p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-2 border-b border-border">
               <div>
-                <span className="text-[10px] uppercase font-bold text-blue-600 tracking-wider">Tier 3 AI Intervention</span>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-amber">
+                  Curated Educational Video • Safe Player
+                </span>
                 <h3 className="font-serif font-bold text-ink text-base">{tier3Video.title}</h3>
               </div>
-              <button
-                onClick={() => setShowVideoModal(false)}
-                className="text-xs text-muted hover:text-ink cursor-pointer"
-              >
-                ✕ Close
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await fetch('/api/study-assistant', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          action: 'report_video',
+                          videoId: tier3Video.id || tier3Video.youtubeId,
+                          reason: 'Not helpful / inappropriate',
+                        }),
+                      });
+                      showToast('Video marked as deprecated based on your feedback.');
+                      setShowVideoModal(false);
+                    } catch (e) {
+                      showToast('Feedback recorded.');
+                    }
+                  }}
+                  className="text-[11px] px-2.5 py-1 text-muted hover:text-bad border border-border hover:border-bad/40 rounded-lg transition-colors cursor-pointer"
+                  title="Report unhelpful or poor quality video for deprecation"
+                >
+                  ⚠️ Not helpful / inappropriate
+                </button>
+                <button
+                  onClick={() => setShowVideoModal(false)}
+                  className="text-xs text-muted hover:text-ink cursor-pointer p-1"
+                >
+                  ✕ Close
+                </button>
+              </div>
             </div>
 
             <p className="text-xs text-ink/80">{tier3Video.message}</p>
 
-            {/* Embedded YouTube Player (youtube-nocookie.com) */}
-            <div className="aspect-video w-full rounded-2xl overflow-hidden bg-black shadow-md">
-              <iframe
-                src={`https://www.youtube-nocookie.com/embed/${tier3Video.youtubeId}?enablejsapi=1`}
-                className="w-full h-full border-0"
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                allowFullScreen
-                title={tier3Video.title}
-              />
+            {/* Safe Embedded YouTube Player: rel=0, modestbranding=1, controls=1, disablekb=1 */}
+            <div className="aspect-video w-full rounded-2xl overflow-hidden bg-black shadow-md flex items-center justify-center">
+              {!isVideoEnded ? (
+                <iframe
+                  src={`https://www.youtube-nocookie.com/embed/${tier3Video.youtubeId}?rel=0&modestbranding=1&controls=1&disablekb=1&enablejsapi=1`}
+                  className="w-full h-full border-0"
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                  allowFullScreen
+                  title={tier3Video.title}
+                />
+              ) : (
+                /* Immediate unmount on end to eliminate YouTube's end-screen of related videos */
+                <div className="p-8 text-center text-white space-y-2">
+                  <span className="text-3xl">🎓</span>
+                  <h4 className="font-bold text-sm">Video Playback Completed</h4>
+                  <p className="text-xs text-white/70">
+                    YouTube end-screen was unmounted to maintain educational focus. Please complete the verification quiz below.
+                  </p>
+                </div>
+              )}
             </div>
 
-            {/* Simulated 80% Watch unlock toggle */}
-            {!videoWatched ? (
-              <div className="p-3 bg-card-alt rounded-xl border border-border flex items-center justify-between">
-                <span className="text-xs text-muted">Watch the tutorial to unlock the post-video quiz</span>
-                <button
-                  onClick={() => setVideoWatched(true)}
-                  className="text-xs px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg cursor-pointer"
-                >
-                  I Finished Watching (Unlock Quiz)
-                </button>
+            {/* Video watch-time gate: 80% required while tab is active */}
+            {!(videoWatchSeconds >= 240 || videoWatched) ? (
+              <div className="p-3.5 bg-card-alt rounded-xl border border-border space-y-2">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-muted font-medium">
+                    Watch Gate: {Math.min(100, Math.round((videoWatchSeconds / 240) * 100))}% (Active tab only)
+                  </span>
+                  <span className="text-[11px] font-mono text-muted">
+                    {Math.min(240, videoWatchSeconds)}s / 240s
+                  </span>
+                </div>
+                <div className="h-1.5 w-full bg-border rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-amber transition-all duration-300 rounded-full"
+                    style={{ width: `${Math.min(100, (videoWatchSeconds / 240) * 100)}%` }}
+                  />
+                </div>
+                <div className="flex justify-between items-center pt-1">
+                  <span className="text-[10px] text-muted italic">
+                    Quiz unlocks automatically once 80% (4 min) has played while tab is visible.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setVideoWatched(true);
+                      setVideoWatchSeconds(240);
+                    }}
+                    className="text-[10px] text-amber hover:underline cursor-pointer"
+                  >
+                    Simulate full watch →
+                  </button>
+                </div>
               </div>
             ) : (
               <div className="p-4 bg-card-alt rounded-xl border border-border space-y-4 animate-fade-in">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-ink uppercase tracking-wider">Verification Quiz</span>
-                  <span className="text-xs text-ok font-bold">Unlocked ✓</span>
+                  <span className="text-xs font-bold text-ink uppercase tracking-wider">
+                    Post-Video Verification (3 Questions)
+                  </span>
+                  <span className="text-xs text-ok font-bold">Watch Gate Passed ✓</span>
                 </div>
 
                 <div className="space-y-3">
@@ -2185,7 +2674,7 @@ function useAsync(asyncFn) {
                   <div className="p-3 bg-card rounded-lg border border-border text-xs">
                     <p className="font-bold text-ink">Score: {videoQuizResult.score}%</p>
                     {videoQuizResult.reason && (
-                      <p className="text-blue-600 mt-1">{videoQuizResult.reason}</p>
+                      <p className="text-amber mt-1">{videoQuizResult.reason}</p>
                     )}
                   </div>
                 )}
@@ -2237,75 +2726,39 @@ function useAsync(asyncFn) {
         </div>
       )}
 
-      {/* ─── Part 7: End-of-Session AI Summary Modal ──────────────── */}
+      {/* ─── Section 5: End-of-Session Summary with Section 3 Recommendation & [Why this?] ──── */}
       {showSummaryModal && (
-        <div className="fixed inset-0 z-[130] bg-ink/70 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
-          <div className="bg-card border border-border rounded-[24px] max-w-lg w-full p-6 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-border">
-              <div className="flex items-center gap-2.5">
-                <span className="text-2xl">🎓</span>
-                <h3 className="font-serif font-bold text-ink text-base">End-of-Session AI Synthesis</h3>
-              </div>
-              <button
-                onClick={() => setShowSummaryModal(false)}
-                className="text-xs text-muted hover:text-ink cursor-pointer"
-              >
-                ✕ Close
-              </button>
+        <div className="fixed inset-0 z-[130] bg-ink/75 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in overflow-y-auto">
+          {isGeneratingSummary ? (
+            <div className="bg-card border border-border rounded-[24px] max-w-md w-full p-8 shadow-2xl text-center space-y-4 animate-scale-in">
+              <div className="w-10 h-10 border-3 border-amber border-t-transparent rounded-full animate-spin mx-auto" />
+              <h3 className="font-serif font-bold text-ink text-base">Synthesizing Session Performance</h3>
+              <p className="text-xs text-muted leading-relaxed">
+                Analyzing test scores, calculating empirical deltas, and evaluating the Adaptive Engine next step...
+              </p>
             </div>
-
-            {isGeneratingSummary ? (
-              <div className="py-8 text-center space-y-3">
-                <div className="w-8 h-8 border-2 border-amber border-t-transparent rounded-full animate-spin mx-auto" />
-                <p className="text-xs text-muted">Synthesizing session metrics and diagnosing weak areas...</p>
-              </div>
-            ) : sessionSummary ? (
-              <div className="space-y-4 text-xs">
-                <div className="p-3.5 bg-card-alt rounded-xl border border-border">
-                  <span className="text-[10px] uppercase font-bold text-muted tracking-wider block mb-1">Session Overview</span>
-                  <p className="text-ink leading-relaxed">{sessionSummary.summary}</p>
-                </div>
-
-                {sessionSummary.strengths && sessionSummary.strengths.length > 0 && (
-                  <div>
-                    <span className="text-[10px] uppercase font-bold text-ok tracking-wider block mb-1">Demonstrated Strengths</span>
-                    <ul className="space-y-1">
-                      {sessionSummary.strengths.map((str, i) => (
-                        <li key={i} className="flex items-center gap-2 text-ink">
-                          <span className="text-ok font-bold">✓</span>
-                          <span>{str}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-
-                {sessionSummary.weakTopics && sessionSummary.weakTopics.length > 0 && (
-                  <div className="p-3.5 bg-amber/10 border border-amber/25 rounded-xl space-y-2">
-                    <span className="text-[10px] uppercase font-bold text-amber tracking-wider block">Autonomous Roadmap Adaptation</span>
-                    <p className="text-ink text-[11px]">
-                      The AI Learning Planner has identified weak concepts and appended the following reinforcement modules to your Skill Roadmap:
-                    </p>
-                    <ul className="space-y-1">
-                      {sessionSummary.weakTopics.map((topic, i) => (
-                        <li key={i} className="text-ink font-semibold flex items-center gap-1.5">
-                          <span className="text-amber">●</span>
-                          <span>{topic} (Reinforcement Node)</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-
-                <button
-                  onClick={() => setShowSummaryModal(false)}
-                  className="w-full py-2.5 bg-amber hover:bg-terracotta text-white font-bold text-xs rounded-xl shadow-xs transition-colors cursor-pointer"
-                >
-                  Return to Learning Hub
-                </button>
-              </div>
-            ) : null}
-          </div>
+          ) : sessionSummary ? (
+            <SessionSummaryCard
+              topic={sessionSummary?.summary?.topic || studentTrack}
+              partnerName={activePeer.name}
+              durationMinutes={sessionSummary?.summary?.duration_minutes || 25}
+              beforeScore={sessionSummary?.summary?.before_score ?? preScore}
+              afterScore={sessionSummary?.summary?.after_score ?? postScore}
+              improvement={sessionSummary?.summary?.improvement ?? (preScore !== null && postScore !== null ? postScore - preScore : null)}
+              whatYouLearned={sessionSummary?.keyTakeaways || sessionSummary?.strengths || []}
+              aiSummary={sessionSummary?.summary?.ai_summary || sessionSummary?.summary}
+              nextRecommendation={sessionSummary?.nextRecommendation || sessionSummary?.summary?.next_recommendation}
+              onClose={() => setShowSummaryModal(false)}
+              onActionClick={(action) => {
+                setShowSummaryModal(false);
+                if (action === 'peer_rematch') {
+                  window.location.href = '/app/match';
+                } else {
+                  showToast(`Launching adaptive action: ${action.replace('_', ' ')}`);
+                }
+              }}
+            />
+          ) : null}
         </div>
       )}
     </div>

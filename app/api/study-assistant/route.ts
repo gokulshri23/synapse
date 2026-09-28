@@ -3,6 +3,7 @@ import { GoogleGenAI } from '@google/genai';
 import {
   getVideoForTopic,
   recordVideoAttempt,
+  deprecateVideo,
   logAgentActivity,
 } from '@/lib/cloudStore';
 
@@ -37,7 +38,29 @@ export async function POST(req: NextRequest) {
       action = 'check_chat',
       videoId,
       postQuizScore,
+      reason = 'Not helpful / inappropriate',
     } = body;
+
+    // Handle student reporting video ("Not helpful / inappropriate") -> deprecation flag
+    if (action === 'report_video' || action === 'deprecate_video') {
+      if (!videoId) {
+        return NextResponse.json({ success: false, error: 'videoId is required' }, { status: 400 });
+      }
+
+      const success = deprecateVideo(videoId, reason);
+      logAgentActivity(
+        'StudyAssistant',
+        'deprecate_video_reported',
+        `Video ${videoId} reported as "${reason}" by student. Flagged as deprecated in video library.`,
+        { videoId, reason, success }
+      );
+
+      return NextResponse.json({
+        success: true,
+        deprecated: true,
+        message: 'Video feedback recorded. Video has been marked deprecated in the library.',
+      });
+    }
 
     // Handle post-video quiz recording
     if (action === 'record_quiz') {
@@ -56,9 +79,10 @@ export async function POST(req: NextRequest) {
 
       let adaptationNeeded = false;
       let adaptationReason = '';
-      if (score < 50) {
+      if (score < 70) {
+        // If score < 70%, trigger Adaptive Engine (rematch or easier subtopic)
         adaptationNeeded = true;
-        adaptationReason = `Learner struggled with post-video quiz (${score}%). Autonomous rematch recommended.`;
+        adaptationReason = `Learner scored ${score}% (< 70%) on post-video quiz. Autonomous peer rematch or prerequisite revision triggered.`;
       }
 
       return NextResponse.json({
@@ -66,6 +90,7 @@ export async function POST(req: NextRequest) {
         effectiveness: effect,
         adaptationNeeded,
         adaptationReason,
+        score,
       });
     }
 
@@ -102,6 +127,43 @@ export async function POST(req: NextRequest) {
         isConfusionMsg(m.text)
     ).length;
 
+    const anyConfusion = userConfusionCount > 0 || peerConfusionCount > 0;
+
+    if (!anyConfusion) {
+      return NextResponse.json({
+        success: true,
+        triggered: false,
+        reason: 'No confusion detected in recent messages',
+      });
+    }
+
+    // If matched: call Gemini to extract the EXACT concept they are confused about (never show raw)
+    let extractedConcept = topic;
+    if (process.env.GEMINI_API_KEY) {
+      try {
+        const conceptPrompt = `A student studying '${topic}' in a peer programming session is experiencing confusion.
+Recent chat excerpt:
+${last10.map((m: any) => `${m.senderName || m.sender}: ${m.text}`).join('\n')}
+
+Extract the single EXACT specific concept or subtopic they are confused about (e.g. 'useEffect cleanup', 'list slicing', 'async error handling', 'props vs state').
+Return ONLY the concise concept name (1 to 4 words). Do not include formatting, quotes, or conversational text.`;
+
+        const conceptRes = await ai.models.generateContent({
+          model: 'gemini-2.0-flash',
+          contents: conceptPrompt,
+        });
+
+        if (conceptRes.text) {
+          const cleaned = conceptRes.text.trim().replace(/^["']|["']$/g, '');
+          if (cleaned.length > 2 && cleaned.length < 50) {
+            extractedConcept = cleaned;
+          }
+        }
+      } catch (e) {
+        console.warn('[study-assistant] Gemini concept extraction fallback:', e);
+      }
+    }
+
     // Check if AI previously intervened in last 6 messages
     const last6 = textMessages.slice(-6);
     const hasPreviousAiIntervention = last6.some(
@@ -109,43 +171,42 @@ export async function POST(req: NextRequest) {
     );
     const recentConfusionAfterAi = hasPreviousAiIntervention && last6.some((m: any) => isConfusionMsg(m.text));
 
-    // --- TIER 3: Still confused after AI explained -> Send Video ---
+    // --- STEP 3: Still confused after AI explanation -> Embed ONE video ---
     if (recentConfusionAfterAi) {
       lastInterventionTimes[sessionId] = now;
-      const video = getVideoForTopic(topic);
+      const video = getVideoForTopic(extractedConcept || topic);
 
-      // Generate 3-5 fresh questions on the topic
       const postQuestions = [
         {
           id: 'vq1',
-          question: `According to standard principles in ${topic}, what is the best practice for managing state updates?`,
+          question: `In ${extractedConcept || topic}, which principle is essential for maintaining predictable behavior?`,
           options: [
-            'Directly mutate the state object',
-            'Use immutable update patterns or setter functions',
-            'Store everything in global variables',
-            'Reload the page on change',
+            'Directly mutating shared global variables',
+            'Applying immutable state updates and explicit dependency control',
+            'Suppressing all asynchronous errors silently',
+            'Running infinite synchronous loops',
           ],
           correct: 1,
         },
         {
           id: 'vq2',
-          question: `In ${topic}, which mechanism handles asynchronous error boundaries effectively?`,
+          question: `How should edge cases and async failures in ${extractedConcept || topic} be managed?`,
           options: [
-            'try/catch blocks with proper error state handling',
+            'Robust try/catch error boundaries with fallback states',
             'Ignoring rejected promises',
-            'Wrapping all code in setTimeout',
-            'Synchronous blocking while loops',
+            'Reloading the entire application window',
+            'Wrapping all expressions in eval()',
           ],
           correct: 0,
         },
         {
           id: 'vq3',
-          question: `What is the primary architectural benefit of modular component separation in ${topic}?`,
+          question: `What is the key architectural objective when designing modular implementations for ${extractedConcept || topic}?`,
           options: [
-            'Decreases build times to zero',
-            'Reusability, isolated testing, and predictable data flow',
-            'Removes all need for unit tests',
-            'Forces all components to share identical state',
+            'Minimizing readability to increase minification speed',
+            'High cohesion, loose coupling, and testable isolated contracts',
+            'Avoiding any type definitions or interfaces',
+            'Merging business logic directly into presentation views',
           ],
           correct: 1,
         },
@@ -154,8 +215,8 @@ export async function POST(req: NextRequest) {
       logAgentActivity(
         'StudyAssistant',
         'tier_3_curated_video',
-        `Both peers remained confused after AI explanation. Embedded curated video "${video.title}" (YouTube ID: ${video.youtube_id}) with post-video quiz.`,
-        { topic, youtubeId: video.youtube_id }
+        `Learners remained confused after AI explanation regarding "${extractedConcept}". Embedded curated educational video "${video.title}" (ID: ${video.youtube_id}).`,
+        { concept: extractedConcept, topic, youtubeId: video.youtube_id }
       );
 
       return NextResponse.json({
@@ -163,30 +224,32 @@ export async function POST(req: NextRequest) {
         triggered: true,
         tier: 3,
         action: 'send_video',
+        concept: extractedConcept,
         video: {
           id: video.id,
           youtubeId: video.youtube_id,
           title: video.title,
+          durationSeconds: 300,
         },
         postQuiz: postQuestions,
-        message: `Still having difficulty with ${topic}? Watch this targeted 5-minute curated tutorial together. The verification quiz will unlock once you finish watching.`,
+        message: `Here's a 5-minute video that explains ${extractedConcept} well. The verification quiz will unlock once you watch 80%.`,
       });
     }
 
-    // --- TIER 2: Both peers confused about the same concept -> AI teaches both ---
+    // --- STEP 2: Both users confused about the same concept -> AI teaches both in plain language with a 3-line example ---
     if (userConfusionCount >= 1 && peerConfusionCount >= 1) {
       lastInterventionTimes[sessionId] = now;
 
-      let explanation = `In ${topic}, the key idea is breaking down complex asynchronous operations into predictable, isolated states (loading, success, error) so neither race conditions nor inconsistent states occur.`;
+      let explanation = `In ${extractedConcept}, the core idea is separating initialization from side effects and cleanup to prevent memory leaks and unexpected state transitions.\n\n\`\`\`js\nuseEffect(() => {\n  const sub = subscribe(id, handler);\n  return () => sub.unsubscribe(); // clean up\n}, [id]);\n\`\`\``;
 
       if (process.env.GEMINI_API_KEY) {
         try {
           const prompt = `You are an AI study assistant joining a peer study session.
-Both students are confused about '${topic}'.
+Both students are confused about '${extractedConcept}'.
 Recent chat context:
 ${last10.map((m: any) => `${m.senderName || m.sender}: ${m.text}`).join('\n')}
 
-Provide a clear, plain-language 2-sentence explanation of the concept followed by ONE concise 3-line code example. Keep it beginner-friendly and encouraging.`;
+Provide a clear, plain-language 2-sentence explanation of '${extractedConcept}' followed by ONE concise 3-line code example. Keep it beginner-friendly, concrete, and encouraging.`;
 
           const response = await ai.models.generateContent({
             model: 'gemini-2.0-flash',
@@ -204,8 +267,8 @@ Provide a clear, plain-language 2-sentence explanation of the concept followed b
       logAgentActivity(
         'StudyAssistant',
         'tier_2_joint_explanation',
-        `Both peers were confused about "${topic}". Delivered shared plain-language explanation and example.`,
-        { topic }
+        `Both peers were confused about "${extractedConcept}". Delivered shared plain-language explanation with 3-line example.`,
+        { concept: extractedConcept, topic }
       );
 
       return NextResponse.json({
@@ -213,20 +276,21 @@ Provide a clear, plain-language 2-sentence explanation of the concept followed b
         triggered: true,
         tier: 2,
         action: 'teach_both',
+        concept: extractedConcept,
         explanation,
-        message: `🤖 **AI Study Assistant**: Both of you seem stuck on **${topic}**. Let's break it down together:\n\n${explanation}`,
+        message: `🤖 **AI Study Assistant**: Both of you seem stuck on **${extractedConcept}**. Let's break it down together:\n\n${explanation}`,
       });
     }
 
-    // --- TIER 1: Same user confused 3 times in last 10 messages -> Suggest Voice Call ---
+    // --- STEP 1: Same user confused 3 times in last 10 messages -> Suggest Voice Call ---
     if (userConfusionCount >= 3) {
       lastInterventionTimes[sessionId] = now;
 
       logAgentActivity(
         'StudyAssistant',
         'tier_1_suggest_voice_call',
-        `Learner sent 3 confusion signals within 10 messages. Suggested starting a live voice call for higher-bandwidth communication.`,
-        { userConfusionCount }
+        `Learner sent 3 confusion signals within 10 messages. Suggested starting a live voice call for higher bandwidth communication.`,
+        { userConfusionCount, concept: extractedConcept }
       );
 
       return NextResponse.json({
@@ -234,6 +298,7 @@ Provide a clear, plain-language 2-sentence explanation of the concept followed b
         triggered: true,
         tier: 1,
         action: 'suggest_voice_call',
+        concept: extractedConcept,
         message: 'Having trouble understanding each other? Try a voice call to explain in real-time.',
       });
     }
@@ -241,7 +306,7 @@ Provide a clear, plain-language 2-sentence explanation of the concept followed b
     return NextResponse.json({
       success: true,
       triggered: false,
-      reason: 'No confusion threshold reached',
+      reason: 'Confusion threshold not met for intervention',
     });
   } catch (err: any) {
     return NextResponse.json({ success: false, error: err?.message }, { status: 500 });

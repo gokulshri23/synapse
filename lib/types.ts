@@ -330,5 +330,81 @@ export interface AgentActivityEntry {
   action: string;
   reason: string;
   details?: Record<string, any>;
+  decision_id?: string;
+}
+
+// =========================================================================
+//  Adaptive Engine v2 Types (Sections 1 - 6)
+// =========================================================================
+
+export interface SkillTopic {
+  id?: string;
+  skill: string;
+  topic: string;
+  order_index: number;
+}
+
+export type TopicMasteryLabel = 'Weak' | 'Developing' | 'Strong' | 'Not enough data yet';
+
+export interface TopicMastery {
+  id?: string;
+  user_id: string;
+  skill: string;
+  topic: string;
+  mastery: number;
+  answered: number;
+  mastery_pct?: number;
+  questions_answered?: number;
+  updated_at: string;
+  label?: TopicMasteryLabel;
+}
+
+export interface ActionHistoryRecord {
+  id: string;
+  user_id: string;
+  topic: string;
+  action: 'daily_mission' | 'revision_node' | 'targeted_practice' | 'ai_explanation' | 'peer_rematch' | 'joint_concept_and_video' | 'network_gap_retry' | string;
+  tried_at: string;
+  outcome: 'passed' | 'failed' | 'skipped' | 'pending';
+}
+
+export interface AgentDecision {
+  id: string;
+  user_id: string;
+  kind: 'peer_suggestion' | 'practice' | 'revision' | 'ai_explanation' | 'rematch' | 'video' | 'daily_mission' | 'reminder';
+  action: string;
+  reason_code: 'low_engagement' | 'missing_basics' | 'specific_gap' | 'needs_explanation' | 'explanation_not_enough' | 'both_stuck' | 'exhausted' | string;
+  reason_text: string;
+  evidence: Record<string, any>;
+  created_at: string;
+}
+
+export interface SessionSummaryRecord {
+  id: string;
+  session_id: string;
+  user_id: string;
+  topic: string;
+  duration_minutes: number;
+  before_score: number | null;
+  after_score: number | null;
+  improvement: number | null;
+  next_recommendation: {
+    action: string;
+    topic?: string;
+    reason?: string;
+    decision_id?: string;
+  };
+  ai_summary: string;
+  ai_review: string;
+  created_at: string;
+}
+
+export interface TeachingStats {
+  id?: string;
+  user_id: string;
+  skill: string;
+  sessions: number;
+  avg_improvement: number;
+  updated_at: string;
 }
 

@@ -4,6 +4,8 @@ import {
   updatePeerHeartbeat,
   getMessages,
   addMessage,
+  addSignalingMessage,
+  getSignalingMessages,
 } from '@/lib/cloudStore';
 
 export async function GET(req: Request) {
@@ -11,6 +13,15 @@ export async function GET(req: Request) {
     const { searchParams } = new URL(req.url);
     const excludeEmail = searchParams.get('excludeEmail') || '';
     const sessionId = searchParams.get('sessionId') || '';
+    const isSignaling = searchParams.get('signaling') === 'true';
+    const forUserId = searchParams.get('userId') || '';
+    const sinceTime = Number(searchParams.get('since') || '0');
+
+    // If querying WebRTC signaling
+    if (isSignaling && sessionId && forUserId) {
+      const signals = getSignalingMessages(sessionId, forUserId, sinceTime);
+      return NextResponse.json({ signals });
+    }
 
     // If querying chat messages
     if (sessionId) {
@@ -30,7 +41,23 @@ export async function POST(req: Request) {
   try {
     const body = await req.json();
 
-    // Case 1: Posting a message or call event
+    // Case 1: WebRTC Signaling packet (Offer / Answer / ICE candidate)
+    if (
+      body.type === 'webrtc_offer' ||
+      body.type === 'webrtc_answer' ||
+      body.type === 'webrtc_candidate'
+    ) {
+      const signal = addSignalingMessage({
+        sessionId: body.sessionId || 'global_collab',
+        senderId: body.senderId || 'anon',
+        recipientId: body.recipientId,
+        type: body.type,
+        payload: body.offer || body.answer || body.candidate || body.payload,
+      });
+      return NextResponse.json({ success: true, signal });
+    }
+
+    // Case 2: Posting a message or call event
     if (body.type === 'message' || body.type === 'call_invite' || body.type === 'call_end') {
       const isCallInvite = body.type === 'call_invite';
       const defaultText = isCallInvite
@@ -58,7 +85,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: true, message: msg });
     }
 
-    // Case 2: Registering active peer / heartbeat
+    // Case 3: Registering active peer / heartbeat
     const { name, email, domain, level, score, avatar, offers, needs } = body;
     if (!email) {
       return NextResponse.json({ error: 'Email required for peer registration' }, { status: 400 });

@@ -11,6 +11,13 @@ import {
   VideoLibraryItem,
   VideoEffectivenessRecord,
   AgentActivityEntry,
+  SkillTopic,
+  TopicMastery,
+  TopicMasteryLabel,
+  ActionHistoryRecord,
+  AgentDecision,
+  SessionSummaryRecord,
+  TeachingStats,
 } from '@/lib/types';
 
 // Ensure IPv4 first on Node to prevent connection latency
@@ -140,7 +147,7 @@ export interface CloudConnection {
   recipientId: string;
   recipientName: string;
   skillArea: string;
-  status: 'pending' | 'accepted' | 'declined';
+  status: 'pending' | 'accepted' | 'declined' | 'cancelled';
   createdAt: string;
   updatedAt: string;
 }
@@ -264,6 +271,24 @@ interface CloudStoreData {
   // Study Room additions
   study_rooms: Record<string, CloudStudyRoom>;
   reports: CloudReport[];
+  signaling?: Record<string, CloudSignalingMessage[]>;
+  // Adaptive Engine v2 additions (Sections 1-6)
+  skill_topics: Record<string, SkillTopic[]>;
+  topic_mastery: Record<string, TopicMastery>;
+  action_history: Record<string, ActionHistoryRecord[]>;
+  agent_decisions: AgentDecision[];
+  session_summaries: SessionSummaryRecord[];
+  teaching_stats: Record<string, TeachingStats>;
+}
+
+export interface CloudSignalingMessage {
+  id: string;
+  sessionId: string;
+  senderId: string;
+  recipientId: string;
+  type: 'webrtc_offer' | 'webrtc_answer' | 'webrtc_candidate';
+  payload: any;
+  createdAt: number;
 }
 
 // Global in-memory cache to maintain state across hot lambda invocations
@@ -307,6 +332,12 @@ function loadStore(): CloudStoreData {
         agent_activity_logs: Array.isArray(parsed.agent_activity_logs) ? parsed.agent_activity_logs : [],
         study_rooms: parsed.study_rooms || {},
         reports: Array.isArray(parsed.reports) ? parsed.reports : [],
+        skill_topics: parsed.skill_topics || {},
+        topic_mastery: parsed.topic_mastery || {},
+        action_history: parsed.action_history || {},
+        agent_decisions: Array.isArray(parsed.agent_decisions) ? parsed.agent_decisions : [],
+        session_summaries: Array.isArray(parsed.session_summaries) ? parsed.session_summaries : [],
+        teaching_stats: parsed.teaching_stats || {},
       };
       return global.__synapse_cloud_cache;
     }
@@ -345,6 +376,12 @@ function loadStore(): CloudStoreData {
     agent_activity_logs: [],
     study_rooms: {},
     reports: [],
+    skill_topics: {},
+    topic_mastery: {},
+    action_history: {},
+    agent_decisions: [],
+    session_summaries: [],
+    teaching_stats: {},
   };
 
   global.__synapse_cloud_cache = initial;
@@ -563,7 +600,7 @@ export function addMessage(msg: {
   return newMsg;
 }
 
-// --- Connections (Pending -> Accepted -> Declined) ---
+// --- Connections (Pending -> Accepted -> Declined / Cancelled) ---
 export function createConnection(
   requesterId: string,
   requesterName: string,
@@ -576,9 +613,20 @@ export function createConnection(
   const recNorm = recipientId.trim().toLowerCase();
   const connKey = [reqNorm, recNorm].sort().join('___');
 
-  // If connection already exists, return existing
+  // If connection already exists, return existing or reset if previously declined/cancelled
   if (store.connections[connKey]) {
-    return store.connections[connKey];
+    const existing = store.connections[connKey];
+    if (existing.status === 'declined' || existing.status === 'cancelled') {
+      existing.status = 'pending';
+      existing.requesterId = reqNorm;
+      existing.requesterName = requesterName;
+      existing.recipientId = recNorm;
+      existing.recipientName = recipientName;
+      existing.skillArea = skillArea;
+      existing.updatedAt = new Date().toISOString();
+      saveStore(store);
+    }
+    return existing;
   }
 
   const conn: CloudConnection = {
@@ -600,7 +648,7 @@ export function createConnection(
 
 export function updateConnectionStatus(
   connId: string,
-  status: 'accepted' | 'declined'
+  status: 'accepted' | 'declined' | 'cancelled'
 ): CloudConnection | null {
   const store = loadStore();
   const connKey = Object.keys(store.connections).find((k) => store.connections[k].id === connId);
@@ -610,6 +658,24 @@ export function updateConnectionStatus(
   store.connections[connKey].updatedAt = new Date().toISOString();
   saveStore(store);
   return store.connections[connKey];
+}
+
+export function cancelConnectionByUser(
+  requesterId: string,
+  recipientId: string
+): boolean {
+  const store = loadStore();
+  const reqNorm = requesterId.trim().toLowerCase();
+  const recNorm = recipientId.trim().toLowerCase();
+  const connKey = [reqNorm, recNorm].sort().join('___');
+
+  if (store.connections[connKey]) {
+    store.connections[connKey].status = 'cancelled';
+    store.connections[connKey].updatedAt = new Date().toISOString();
+    saveStore(store);
+    return true;
+  }
+  return false;
 }
 
 export function getConnectionsForUser(userId: string): {
@@ -633,6 +699,70 @@ export function getConnectionsForUser(userId: string): {
 
   return { active, pendingIncoming, pendingOutgoing };
 }
+
+// --- WebRTC Peer-to-Peer Signaling Buffer ---
+export function addSignalingMessage(msg: {
+  sessionId?: string;
+  senderId: string;
+  recipientId?: string;
+  type: 'webrtc_offer' | 'webrtc_answer' | 'webrtc_candidate';
+  payload: any;
+}): CloudSignalingMessage {
+  const store = loadStore();
+  if (!store.signaling) store.signaling = {};
+
+  const sessKey = msg.sessionId || 'global_collab';
+  if (!store.signaling[sessKey]) store.signaling[sessKey] = [];
+
+  const newSignal: CloudSignalingMessage = {
+    id: 'sig_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+    sessionId: sessKey,
+    senderId: msg.senderId.toLowerCase().trim(),
+    recipientId: (msg.recipientId || '').toLowerCase().trim(),
+    type: msg.type,
+    payload: msg.payload,
+    createdAt: Date.now(),
+  };
+
+  store.signaling[sessKey].push(newSignal);
+  // Keep last 40 signaling packets per session
+  if (store.signaling[sessKey].length > 40) {
+    store.signaling[sessKey] = store.signaling[sessKey].slice(-40);
+  }
+  saveStore(store);
+  return newSignal;
+}
+
+export function getSignalingMessages(
+  sessionId: string,
+  forUserId: string,
+  sinceTime = 0
+): CloudSignalingMessage[] {
+  const store = loadStore();
+  if (!store.signaling) return [];
+
+  const sessKey = sessionId || 'global_collab';
+  const list = store.signaling[sessKey] || [];
+  const normUser = forUserId.toLowerCase().trim();
+
+  // Return messages destined for this user or broadcast to this session, not sent by themselves
+  return list.filter((s) => {
+    if (s.createdAt <= sinceTime) return false;
+    const sSender = (s.senderId || '').toLowerCase().trim();
+    const sRecipient = (s.recipientId || '').toLowerCase().trim();
+    if (sSender === normUser) return false;
+    // If recipient is specified, allow if it matches user, user prefix, or is not specifically targeted to someone else
+    if (sRecipient && sRecipient !== normUser) {
+      const matchPrefix = normUser.split('@')[0];
+      const recPrefix = sRecipient.split('@')[0];
+      if (matchPrefix !== recPrefix && !normUser.includes(sRecipient) && !sRecipient.includes(normUser)) {
+        return false;
+      }
+    }
+    return true;
+  });
+}
+
 
 // --- Challenges (Shared live code tasks) ---
 export function saveChallenge(challenge: Omit<CloudChallenge, 'id' | 'createdAt'>): CloudChallenge {
@@ -795,8 +925,26 @@ export function getCompletedDailyMissions(userId: string): CloudDailyMission[] {
 }
 
 // =========================================================================
-//  PART A — Skill Declarations (replaces self-declared levels)
 // =========================================================================
+//  PART A — Skill Declarations (One source of truth by intent)
+// =========================================================================
+
+export function normalizeSkillId(skill: string): string {
+  const s = (skill || '').trim().toLowerCase();
+  if (s === 'python' || s === 'python programming' || s === 'python3') return 'Python';
+  if (s === 'react' || s === 'react.js' || s === 'reactjs') return 'React';
+  if (s === 'javascript' || s === 'js') return 'JavaScript';
+  if (s === 'typescript' || s === 'ts') return 'TypeScript';
+  if (s === 'machine learning' || s === 'ml' || s === 'machinelearning') return 'Machine Learning';
+  if (s === 'data structures' || s === 'ds' || s === 'dsa') return 'Data Structures';
+  if (s === 'algorithms' || s === 'algo') return 'Algorithms';
+  if (s === 'system design') return 'System Design';
+  if (s === 'problem solving') return 'Problem Solving';
+  if (s === 'web development' || s === 'web dev') return 'Web Development';
+  if (s === 'databases' || s === 'db' || s === 'sql') return 'Databases';
+  if (s === 'devops' || s === 'cloud') return 'DevOps';
+  return skill.trim().replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
 export function createSkillDeclaration(
   userId: string,
@@ -805,13 +953,15 @@ export function createSkillDeclaration(
 ): CloudSkillDeclaration {
   const store = loadStore();
   const norm = userId.trim().toLowerCase();
+  const canonicalSkill = normalizeSkillId(skill);
+
   if (!store.skill_declarations[norm]) {
     store.skill_declarations[norm] = [];
   }
 
-  // Check if a declaration already exists for this skill+intent
+  // Check if a declaration already exists for this canonical skill + intent
   const existing = store.skill_declarations[norm].find(
-    (d) => d.skill.toLowerCase() === skill.toLowerCase() && d.intent === intent
+    (d) => d.skill.toLowerCase() === canonicalSkill.toLowerCase() && d.intent === intent
   );
   if (existing && existing.status !== 'rejected') {
     return existing;
@@ -820,7 +970,7 @@ export function createSkillDeclaration(
   const decl: CloudSkillDeclaration = {
     id: 'sd_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
     user_id: norm,
-    skill,
+    skill: canonicalSkill,
     intent,
     status: 'pending',
     verified_level: 0,
@@ -834,6 +984,47 @@ export function createSkillDeclaration(
   store.skill_declarations[norm].push(decl);
   saveStore(store);
   return decl;
+}
+
+export function toggleSkillDeclaration(
+  userId: string,
+  skill: string,
+  intent: 'teach' | 'learn'
+): { toggled: 'added' | 'removed'; declaration?: CloudSkillDeclaration; declarations: CloudSkillDeclaration[] } {
+  const store = loadStore();
+  const norm = userId.trim().toLowerCase();
+  const canonicalSkill = normalizeSkillId(skill);
+
+  if (!store.skill_declarations[norm]) {
+    store.skill_declarations[norm] = [];
+  }
+
+  const existingIdx = store.skill_declarations[norm].findIndex(
+    (d) => d.skill.toLowerCase() === canonicalSkill.toLowerCase() && d.intent === intent
+  );
+
+  if (existingIdx !== -1) {
+    store.skill_declarations[norm].splice(existingIdx, 1);
+    saveStore(store);
+    return { toggled: 'removed', declarations: store.skill_declarations[norm] };
+  } else {
+    const decl: CloudSkillDeclaration = {
+      id: 'sd_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+      user_id: norm,
+      skill: canonicalSkill,
+      intent,
+      status: 'pending',
+      verified_level: 0,
+      quiz_score: 0,
+      attempt_count: 0,
+      evidence_url: null,
+      last_attempt_at: '',
+      created_at: new Date().toISOString(),
+    };
+    store.skill_declarations[norm].push(decl);
+    saveStore(store);
+    return { toggled: 'added', declaration: decl, declarations: store.skill_declarations[norm] };
+  }
 }
 
 export function updateSkillDeclaration(
@@ -853,10 +1044,14 @@ export function updateSkillDeclaration(
   return null;
 }
 
-export function getSkillDeclarations(userId: string): CloudSkillDeclaration[] {
+export function getSkillDeclarations(userId: string, intent?: 'teach' | 'learn'): CloudSkillDeclaration[] {
   const store = loadStore();
   const norm = userId.trim().toLowerCase();
-  return store.skill_declarations[norm] || [];
+  const all = store.skill_declarations[norm] || [];
+  if (intent) {
+    return all.filter((d) => d.intent === intent);
+  }
+  return all;
 }
 
 export function getVerifiedLevel(userId: string, skill: string): number | null {
@@ -1660,6 +1855,17 @@ export function recordVideoAttempt(
   return rec;
 }
 
+export function deprecateVideo(videoId: string, reason?: string): boolean {
+  const store = loadStore();
+  const vid = store.video_library.find((v) => v.id === videoId || v.youtube_id === videoId);
+  if (vid) {
+    vid.status = 'deprecated';
+    saveStore(store);
+    return true;
+  }
+  return false;
+}
+
 // =========================================================================
 //  FINALS PART 2 — Step 8: Part 7 Agent Activity Feed
 // =========================================================================
@@ -2077,6 +2283,319 @@ export function getRoomBoard(roomId: string): any[] {
   const room = store.study_rooms[roomId];
   return room?.board_elements || [];
 }
+
+// =========================================================================
+//  Adaptive Engine v2 Helpers (Sections 1 - 6)
+// =========================================================================
+
+export function getSkillTopics(skill: string): SkillTopic[] {
+  const store = loadStore();
+  const normSkill = (skill || '').trim().toLowerCase();
+  if (store.skill_topics[normSkill] && store.skill_topics[normSkill].length > 0) {
+    return store.skill_topics[normSkill];
+  }
+
+  // Initialize from default roadmap topics
+  const defaultList = getDefaultTopicsForSkill(normSkill);
+  const items: SkillTopic[] = defaultList.map((topic, order_index) => ({
+    skill: normSkill,
+    topic,
+    order_index,
+  }));
+  store.skill_topics[normSkill] = items;
+  saveStore(store);
+  return items;
+}
+
+export function computeTopicMasteryLabel(mastery: number, answered: number): TopicMasteryLabel {
+  if (answered < 3) {
+    return 'Not enough data yet';
+  }
+  if (mastery >= 70) {
+    return 'Strong';
+  }
+  if (mastery >= 50) {
+    return 'Developing';
+  }
+  return 'Weak';
+}
+
+export function getTopicMastery(userId: string, skill: string, topic?: string): TopicMastery[] {
+  const store = loadStore();
+  const normUser = (userId || '').trim().toLowerCase();
+  const normSkill = (skill || '').trim().toLowerCase();
+
+  const allTopics = getSkillTopics(normSkill);
+  const results: TopicMastery[] = [];
+
+  for (const t of allTopics) {
+    if (topic && t.topic.toLowerCase() !== topic.toLowerCase()) continue;
+    const key = `${normUser}___${normSkill}___${t.topic.toLowerCase()}`;
+    const record = store.topic_mastery[key];
+    if (record) {
+      results.push({
+        ...record,
+        label: computeTopicMasteryLabel(record.mastery, record.answered),
+      });
+    } else {
+      // Default initial record
+      results.push({
+        user_id: normUser,
+        skill: normSkill,
+        topic: t.topic,
+        mastery: 0,
+        answered: 0,
+        updated_at: new Date().toISOString(),
+        label: 'Not enough data yet',
+      });
+    }
+  }
+
+  return results;
+}
+
+export function updateTopicMastery(
+  userId: string,
+  skill: string,
+  topic: string,
+  newPercent: number
+): TopicMastery {
+  const store = loadStore();
+  const normUser = (userId || '').trim().toLowerCase();
+  const normSkill = (skill || '').trim().toLowerCase();
+  const normTopic = (topic || '').trim();
+  const key = `${normUser}___${normSkill}___${normTopic.toLowerCase()}`;
+
+  const cleanPercent = Math.max(0, Math.min(100, Math.round(newPercent)));
+  const existing = store.topic_mastery[key];
+
+  let nextMastery: number;
+  let nextAnswered: number;
+
+  if (existing && existing.answered > 0) {
+    // Formula: mastery = 0.6 * new_percent + 0.4 * old_mastery
+    nextMastery = Math.round(0.6 * cleanPercent + 0.4 * existing.mastery);
+    nextAnswered = existing.answered + 1;
+  } else {
+    // First time: just the new percent
+    nextMastery = cleanPercent;
+    nextAnswered = 1;
+  }
+
+  const updated: TopicMastery = {
+    id: existing?.id || `tm_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+    user_id: normUser,
+    skill: normSkill,
+    topic: normTopic,
+    mastery: nextMastery,
+    answered: nextAnswered,
+    updated_at: new Date().toISOString(),
+    label: computeTopicMasteryLabel(nextMastery, nextAnswered),
+  };
+
+  store.topic_mastery[key] = updated;
+  saveStore(store);
+  return updated;
+}
+
+// ─── Action History ─────────────────────────────────────────────
+export function getActionHistory(userId: string, topic?: string): ActionHistoryRecord[] {
+  const store = loadStore();
+  const normUser = (userId || '').trim().toLowerCase();
+  const list: ActionHistoryRecord[] = [];
+
+  for (const key of Object.keys(store.action_history)) {
+    if (key.startsWith(`${normUser}___`)) {
+      if (topic) {
+        const expectedKey = `${normUser}___${topic.toLowerCase()}`;
+        if (key !== expectedKey) continue;
+      }
+      list.push(...store.action_history[key]);
+    }
+  }
+
+  return list.sort((a, b) => new Date(b.tried_at).getTime() - new Date(a.tried_at).getTime());
+}
+
+export function recordActionHistory(
+  userId: string,
+  topic: string,
+  action: string,
+  outcome: 'passed' | 'failed' | 'skipped' | 'pending'
+): ActionHistoryRecord {
+  const store = loadStore();
+  const normUser = (userId || '').trim().toLowerCase();
+  const normTopic = (topic || '').trim().toLowerCase();
+  const key = `${normUser}___${normTopic}`;
+
+  if (!store.action_history[key]) {
+    store.action_history[key] = [];
+  }
+
+  const record: ActionHistoryRecord = {
+    id: `act_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+    user_id: normUser,
+    topic: topic.trim(),
+    action,
+    tried_at: new Date().toISOString(),
+    outcome,
+  };
+
+  store.action_history[key].push(record);
+  saveStore(store);
+  return record;
+}
+
+export function hasActionFailedRecently(
+  userId: string,
+  topic: string,
+  action: string
+): boolean {
+  const history = getActionHistory(userId, topic);
+  const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
+
+  return history.some((h) => {
+    if (h.action !== action || h.outcome !== 'failed') return false;
+    const triedTime = new Date(h.tried_at).getTime();
+    return triedTime >= oneDayAgo;
+  });
+}
+
+// ─── Agent Decisions ("Why am I being recommended this?") ───────
+export function recordAgentDecision(
+  decision: Omit<AgentDecision, 'id' | 'created_at'>
+): AgentDecision {
+  const store = loadStore();
+  const record: AgentDecision = {
+    id: `dec_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+    user_id: decision.user_id.trim().toLowerCase(),
+    kind: decision.kind,
+    action: decision.action,
+    reason_code: decision.reason_code,
+    reason_text: decision.reason_text,
+    evidence: decision.evidence || {},
+    created_at: new Date().toISOString(),
+  };
+
+  store.agent_decisions.unshift(record);
+  if (store.agent_decisions.length > 500) {
+    store.agent_decisions = store.agent_decisions.slice(0, 500);
+  }
+
+  saveStore(store);
+  return record;
+}
+
+export function getAgentDecision(id: string): AgentDecision | null {
+  const store = loadStore();
+  return store.agent_decisions.find((d) => d.id === id) || null;
+}
+
+export function getAgentDecisionsForUser(userId: string, limit = 20): AgentDecision[] {
+  const store = loadStore();
+  const normUser = (userId || '').trim().toLowerCase();
+  return store.agent_decisions
+    .filter((d) => d.user_id === normUser)
+    .slice(0, limit);
+}
+
+// ─── Session Summaries ──────────────────────────────────────────
+export function saveSessionSummary(
+  summary: Omit<SessionSummaryRecord, 'id' | 'created_at'>
+): SessionSummaryRecord {
+  const store = loadStore();
+  const record: SessionSummaryRecord = {
+    id: `sum_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+    session_id: summary.session_id,
+    user_id: summary.user_id.trim().toLowerCase(),
+    topic: summary.topic,
+    duration_minutes: summary.duration_minutes,
+    before_score: summary.before_score !== null && typeof summary.before_score === 'number' ? summary.before_score : null,
+    after_score: summary.after_score !== null && typeof summary.after_score === 'number' ? summary.after_score : null,
+    improvement: summary.improvement !== null && typeof summary.improvement === 'number' ? summary.improvement : null,
+    next_recommendation: summary.next_recommendation || { action: 'practice' },
+    ai_summary: summary.ai_summary || '',
+    ai_review: summary.ai_review || '',
+    created_at: new Date().toISOString(),
+  };
+
+  store.session_summaries.unshift(record);
+  saveStore(store);
+  return record;
+}
+
+export function getSessionSummaries(userId: string): SessionSummaryRecord[] {
+  const store = loadStore();
+  const normUser = (userId || '').trim().toLowerCase();
+  return store.session_summaries.filter((s) => s.user_id === normUser);
+}
+
+export function getLatestSessionSummary(userId: string, sessionId?: string): SessionSummaryRecord | null {
+  const store = loadStore();
+  const normUser = (userId || '').trim().toLowerCase();
+  if (sessionId) {
+    return store.session_summaries.find((s) => s.user_id === normUser && s.session_id === sessionId) || null;
+  }
+  return store.session_summaries.find((s) => s.user_id === normUser) || null;
+}
+
+// ─── Teaching Stats ─────────────────────────────────────────────
+export function getTeachingStats(userId: string, skill?: string): TeachingStats[] {
+  const store = loadStore();
+  const normUser = (userId || '').trim().toLowerCase();
+  const list: TeachingStats[] = [];
+
+  for (const key of Object.keys(store.teaching_stats)) {
+    if (key.startsWith(`${normUser}___`)) {
+      if (skill) {
+        const expectedKey = `${normUser}___${skill.toLowerCase()}`;
+        if (key !== expectedKey) continue;
+      }
+      list.push(store.teaching_stats[key]);
+    }
+  }
+
+  return list;
+}
+
+export function updateTeachingStats(
+  userId: string,
+  skill: string,
+  sessionDelta: number
+): TeachingStats {
+  const store = loadStore();
+  const normUser = (userId || '').trim().toLowerCase();
+  const normSkill = (skill || '').trim().toLowerCase();
+  const key = `${normUser}___${normSkill}`;
+
+  const existing = store.teaching_stats[key];
+  let nextSessions: number;
+  let nextAvgImprovement: number;
+
+  if (existing) {
+    nextSessions = existing.sessions + 1;
+    nextAvgImprovement = Math.round(
+      ((existing.avg_improvement * existing.sessions) + sessionDelta) / nextSessions
+    );
+  } else {
+    nextSessions = 1;
+    nextAvgImprovement = Math.round(sessionDelta);
+  }
+
+  const updated: TeachingStats = {
+    id: existing?.id || `ts_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+    user_id: normUser,
+    skill: normSkill,
+    sessions: nextSessions,
+    avg_improvement: nextAvgImprovement,
+    updated_at: new Date().toISOString(),
+  };
+
+  store.teaching_stats[key] = updated;
+  saveStore(store);
+  return updated;
+}
+
 
 
 

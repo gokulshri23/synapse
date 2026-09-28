@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { generateSkillTree } from '@/lib/agents/learning-planner';
 import { Skill } from '@/lib/types';
 import ProctoredQuiz from '@/components/proctor/ProctoredQuiz';
+import TopicMasteryCard from '@/components/adaptive/TopicMasteryCard';
 
 export default function SkillsPage() {
   const [studentName, setStudentName] = useState('Learner');
@@ -837,7 +838,19 @@ export default function SkillsPage() {
               )}
             </button>
           </div>
-          {/* Fix #12: Removed Card 3 (College Transcript box) */}
+
+          {/* Section 1: Topic-Level Skill Analysis Card */}
+          <TopicMasteryCard
+            userId={studentEmail || studentName || 'learner@synapse.edu'}
+            skill={domain}
+            onLaunchImprovement={(action, topic) => {
+              if (action === 'daily_mission') {
+                handleOpenMissionModal();
+              } else {
+                setActiveTestSkill(topic);
+              }
+            }}
+          />
         </div>
       </div>
 

@@ -3,6 +3,8 @@ import {
   createSkillDeclaration, 
   updateSkillDeclaration, 
   getSkillDeclarations, 
+  toggleSkillDeclaration,
+  normalizeSkillId,
   getVerifiedLevel, 
   canRetakeQuiz 
 } from '@/lib/cloudStore';
@@ -10,13 +12,14 @@ import {
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const userId = searchParams.get('userId');
+  const intent = searchParams.get('intent') as 'teach' | 'learn' | null;
 
   if (!userId) {
     return NextResponse.json({ error: 'userId is required' }, { status: 400 });
   }
 
   try {
-    const declarations = getSkillDeclarations(userId);
+    const declarations = getSkillDeclarations(userId, intent || undefined);
     return NextResponse.json({ declarations });
   } catch (error) {
     return NextResponse.json({ error: 'Failed to fetch declarations' }, { status: 500 });
@@ -27,6 +30,16 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const { action } = body;
+
+    if (action === 'toggle') {
+      const { userId, skill, intent } = body;
+      if (!userId || !skill || !intent) {
+        return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
+      }
+
+      const result = toggleSkillDeclaration(userId, skill, intent);
+      return NextResponse.json({ success: true, ...result });
+    }
 
     if (action === 'create') {
       const { userId, skill, intent } = body;

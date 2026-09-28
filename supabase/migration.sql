@@ -376,4 +376,199 @@ CREATE POLICY "Allow authenticated room_resources" ON public.room_resources FOR 
 CREATE POLICY "Allow authenticated session_attendance" ON public.session_attendance FOR ALL TO authenticated USING (true);
 CREATE POLICY "Allow authenticated reports" ON public.reports FOR ALL TO authenticated USING (true);
 
+-- =========================================================================
+-- Bug Fix Migration: Connections, Skill Declarations & Realtime Publication
+-- =========================================================================
+
+-- Connections Table with Order-Independent Pair Uniqueness
+CREATE TABLE IF NOT EXISTS public.connections (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  requester_id TEXT NOT NULL,
+  requester_name TEXT,
+  recipient_id TEXT NOT NULL,
+  recipient_name TEXT,
+  skill_area TEXT DEFAULT 'General',
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'declined')),
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- Unique index ensuring no duplicate connection in either direction
+CREATE UNIQUE INDEX IF NOT EXISTS idx_connections_pair ON public.connections (
+  least(lower(requester_id), lower(recipient_id)),
+  greatest(lower(requester_id), lower(recipient_id))
+);
+
+ALTER TABLE public.connections ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow authenticated connections" ON public.connections FOR ALL TO authenticated USING (true);
+
+-- Enhance messages table with thread_id for permanent session/room/pair grouping
+ALTER TABLE public.messages ADD COLUMN IF NOT EXISTS thread_id TEXT;
+ALTER TABLE public.messages ADD COLUMN IF NOT EXISTS sender_email TEXT;
+ALTER TABLE public.messages ALTER COLUMN session_id DROP NOT NULL;
+ALTER TABLE public.messages ALTER COLUMN user_id DROP NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_messages_thread ON public.messages(thread_id, created_at ASC);
+
+-- Skill Declarations Unique Constraint: (user_id, skill, intent)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_skill_declarations_unique ON public.skill_declarations(user_id, skill, intent);
+
+-- Study Rooms Table for Live Collaborative Sessions
+CREATE TABLE IF NOT EXISTS public.study_rooms (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  topic TEXT NOT NULL,
+  host_id TEXT NOT NULL,
+  host_name TEXT NOT NULL,
+  type TEXT NOT NULL DEFAULT 'group' CHECK (type IN ('group', 'pair', 'broadcast')),
+  status TEXT NOT NULL DEFAULT 'live' CHECK (status IN ('waiting', 'live', 'ended')),
+  max_participants INTEGER DEFAULT 6,
+  member_count INTEGER DEFAULT 1,
+  daily_room_name TEXT,
+  daily_room_url TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+  ended_at TIMESTAMP WITH TIME ZONE
+);
+
+CREATE INDEX IF NOT EXISTS idx_study_rooms_status ON public.study_rooms(status, created_at DESC);
+
+ALTER TABLE public.study_rooms ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow authenticated study rooms" ON public.study_rooms FOR ALL TO authenticated USING (true);
+
+-- Realtime Publication for live multi-device synchronization
+DO $$
+BEGIN
+  ALTER PUBLICATION supabase_realtime ADD TABLE public.messages, public.study_rooms, public.connections;
+EXCEPTION WHEN OTHERS THEN
+  -- Table already added to publication or publication already configured
+  NULL;
+END $$;
+
+-- =========================================================================
+-- Adaptive Engine v2 Schema (Sections 1 - 6)
+-- =========================================================================
+
+-- 1. Skill Topics (Generated once per skill by Planner)
+CREATE TABLE IF NOT EXISTS public.skill_topics (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  skill TEXT NOT NULL,
+  topic TEXT NOT NULL,
+  order_index INTEGER DEFAULT 0,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+  UNIQUE(skill, topic)
+);
+
+CREATE INDEX IF NOT EXISTS idx_skill_topics_skill ON public.skill_topics(skill, order_index ASC);
+
+-- 2. Topic Mastery (Per-user topic mastery tracking)
+CREATE TABLE IF NOT EXISTS public.topic_mastery (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id TEXT NOT NULL,
+  skill TEXT NOT NULL,
+  topic TEXT NOT NULL,
+  mastery REAL DEFAULT 0,
+  answered INTEGER DEFAULT 0,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+  UNIQUE(user_id, skill, topic)
+);
+
+CREATE INDEX IF NOT EXISTS idx_topic_mastery_user ON public.topic_mastery(user_id, skill);
+
+-- 3. Action History (Adaptive engine action memory per user & topic)
+CREATE TABLE IF NOT EXISTS public.action_history (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id TEXT NOT NULL,
+  topic TEXT NOT NULL,
+  action TEXT NOT NULL,
+  tried_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+  outcome TEXT NOT NULL DEFAULT 'pending' CHECK (outcome IN ('passed', 'failed', 'skipped', 'pending'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_action_history_user_topic ON public.action_history(user_id, topic, tried_at DESC);
+
+-- 4. Agent Decisions ("Why am I being recommended this?")
+CREATE TABLE IF NOT EXISTS public.agent_decisions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  action TEXT NOT NULL,
+  reason_code TEXT NOT NULL,
+  reason_text TEXT NOT NULL,
+  evidence JSONB DEFAULT '{}'::jsonb,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_decisions_user ON public.agent_decisions(user_id, created_at DESC);
+
+-- 5. Session Summaries
+CREATE TABLE IF NOT EXISTS public.session_summaries (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  session_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  topic TEXT NOT NULL,
+  duration_minutes INTEGER DEFAULT 0,
+  before_score REAL,
+  after_score REAL,
+  improvement REAL,
+  next_recommendation JSONB DEFAULT '{}'::jsonb,
+  ai_summary TEXT,
+  ai_review TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_summaries_user ON public.session_summaries(user_id, created_at DESC);
+
+-- 6. Teaching Stats
+CREATE TABLE IF NOT EXISTS public.teaching_stats (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id TEXT NOT NULL,
+  skill TEXT NOT NULL,
+  sessions INTEGER DEFAULT 0,
+  avg_improvement REAL DEFAULT 0,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+  UNIQUE(user_id, skill)
+);
+
+-- 7. Video Library & Effectiveness
+CREATE TABLE IF NOT EXISTS public.video_library (
+  id TEXT PRIMARY KEY,
+  topic TEXT NOT NULL,
+  concept TEXT NOT NULL,
+  youtube_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'approved' CHECK (status IN ('approved', 'deprecated')),
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS public.video_effectiveness (
+  video_id TEXT PRIMARY KEY,
+  concept TEXT NOT NULL,
+  attempts INTEGER DEFAULT 0,
+  avg_score REAL DEFAULT 0,
+  total_score REAL DEFAULT 0,
+  status TEXT DEFAULT 'active' CHECK (status IN ('active', 'deprecated')),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+ALTER TABLE public.skill_topics ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.topic_mastery ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.action_history ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.agent_decisions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.session_summaries ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.teaching_stats ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.video_library ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.video_effectiveness ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Allow authenticated skill_topics" ON public.skill_topics FOR ALL TO authenticated USING (true);
+CREATE POLICY "Allow authenticated topic_mastery" ON public.topic_mastery FOR ALL TO authenticated USING (true);
+CREATE POLICY "Allow authenticated action_history" ON public.action_history FOR ALL TO authenticated USING (true);
+CREATE POLICY "Allow authenticated agent_decisions" ON public.agent_decisions FOR ALL TO authenticated USING (true);
+CREATE POLICY "Allow authenticated session_summaries" ON public.session_summaries FOR ALL TO authenticated USING (true);
+CREATE POLICY "Allow authenticated teaching_stats" ON public.teaching_stats FOR ALL TO authenticated USING (true);
+CREATE POLICY "Allow authenticated video_library" ON public.video_library FOR ALL TO authenticated USING (true);
+CREATE POLICY "Allow authenticated video_effectiveness" ON public.video_effectiveness FOR ALL TO authenticated USING (true);
+
+
+
+
 

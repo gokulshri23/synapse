@@ -45,7 +45,7 @@ export default function OnboardingPage() {
   const [studyDays, setStudyDays] = useState(30);
   const [customDays, setCustomDays] = useState('');
   const [isCustomDays, setIsCustomDays] = useState(false);
-  const [teachingSkills, setTeachingSkills] = useState<string[]>(['React', 'Problem Solving']);
+  const [teachingSkills, setTeachingSkills] = useState<string[]>([]);
 
   // Verification Quizzes State
   const [quizPhase, setQuizPhase] = useState<'diagnostic' | 'teaching'>('diagnostic');
@@ -417,6 +417,31 @@ export default function OnboardingPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(studyData),
       });
+
+      // 1b. Create canonical skill declarations for teach and learn intents
+      await fetch('/api/skill-declarations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'create',
+          userId: normalizedEmail,
+          skill: learningSkill,
+          intent: 'learn',
+        }),
+      });
+
+      for (const tSkill of teachingSkills) {
+        await fetch('/api/skill-declarations', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'create',
+            userId: normalizedEmail,
+            skill: tSkill,
+            intent: 'teach',
+          }),
+        });
+      }
     } catch (e) {}
 
     // 2. Broadcast to live peer network

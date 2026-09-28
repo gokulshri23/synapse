@@ -21,6 +21,14 @@ import {
   createDailyMeetingToken,
   deleteDailyRoom,
 } from '@/lib/call/dailyService';
+import { createClient } from '@supabase/supabase-js';
+
+function getSupabase() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!url || !key) return null;
+  return createClient(url, key);
+}
 
 export async function GET(req: NextRequest) {
   try {
@@ -29,7 +37,54 @@ export async function GET(req: NextRequest) {
     const roomId = searchParams.get('roomId');
 
     if (action === 'list') {
-      const rooms = getLiveStudyRooms();
+      let rooms = getLiveStudyRooms();
+      const supabase = getSupabase();
+
+      if (supabase) {
+        try {
+          const { data: dbRooms } = await supabase
+            .from('study_rooms')
+            .select('*')
+            .in('status', ['live', 'waiting'])
+            .order('created_at', { ascending: false });
+
+          if (Array.isArray(dbRooms) && dbRooms.length > 0) {
+            const map = new Map<string, any>();
+            rooms.forEach((r) => map.set(r.id, r));
+            dbRooms.forEach((dbR) => {
+              if (!map.has(dbR.id)) {
+                map.set(dbR.id, {
+                  id: dbR.id,
+                  name: dbR.name,
+                  topic: dbR.topic,
+                  host_id: dbR.host_id,
+                  host_name: dbR.host_name,
+                  type: dbR.type || 'group',
+                  status: dbR.status || 'live',
+                  max_participants: dbR.max_participants || 6,
+                  currentLearnerCount: dbR.member_count || 1,
+                  daily_room_name: dbR.daily_room_name,
+                  daily_room_url: dbR.daily_room_url,
+                  created_at: dbR.created_at,
+                  members: {
+                    [dbR.host_id]: {
+                      room_id: dbR.id,
+                      user_id: dbR.host_id,
+                      user_name: dbR.host_name,
+                      role: 'host',
+                      joined_at: dbR.created_at,
+                    },
+                  },
+                  attendance: {},
+                  resources: [],
+                });
+              }
+            });
+            rooms = Array.from(map.values()).filter((r) => r.status === 'live' || r.status === 'waiting');
+          }
+        } catch (dbErr) {}
+      }
+
       const monthlyMinutes = getMonthlyParticipantMinutes();
       return NextResponse.json({
         success: true,
@@ -115,7 +170,29 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      // 3. Issue Host Meeting Token (is_owner: true)
+      // 3. Persist to Supabase study_rooms table for realtime broadcast & permanent state
+      const supabase = getSupabase();
+      if (supabase && storeRes.room) {
+        try {
+          await supabase.from('study_rooms').upsert({
+            id: storeRes.room.id,
+            name: storeRes.room.name,
+            topic: storeRes.room.topic,
+            host_id: storeRes.room.host_id,
+            host_name: storeRes.room.host_name,
+            type: storeRes.room.type || 'group',
+            status: 'live',
+            max_participants: storeRes.room.max_participants || 6,
+            member_count: 1,
+            daily_room_name: dailyRes.roomName,
+            daily_room_url: dailyRes.roomUrl,
+            created_at: storeRes.room.created_at || new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          });
+        } catch (dbErr) {}
+      }
+
+      // 4. Issue Host Meeting Token (is_owner: true)
       const tokenRes = await createDailyMeetingToken({
         roomName: dailyRes.roomName,
         userId: hostId,
@@ -242,6 +319,23 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ success: false, error: 'roomId and userId required' }, { status: 400 });
       }
       const result = leaveStudyRoom(roomId, userId);
+
+      // Do NOT end room when a participant leaves; only update active count
+      const supabase = getSupabase();
+      if (supabase) {
+        try {
+          const room = getStudyRoom(roomId);
+          const activeCount = room ? Object.keys(room.attendance || {}).length : 0;
+          await supabase
+            .from('study_rooms')
+            .update({
+              member_count: Math.max(0, activeCount),
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', roomId);
+        } catch (dbErr) {}
+      }
+
       return NextResponse.json({ ...result });
     }
 
@@ -259,6 +353,20 @@ export async function POST(req: NextRequest) {
 
       const result = endStudyRoom(roomId, hostId);
       deleteDailyRoom(room.daily_room_name).catch(() => {});
+
+      const supabase = getSupabase();
+      if (supabase) {
+        try {
+          await supabase
+            .from('study_rooms')
+            .update({
+              status: 'ended',
+              ended_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', roomId);
+        } catch (dbErr) {}
+      }
 
       return NextResponse.json({ success: true, summary: result.summary });
     }

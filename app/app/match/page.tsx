@@ -71,12 +71,31 @@ export default function MatchPage() {
 
   // Connections State
   const [incomingRequests, setIncomingRequests] = useState<any[]>([]);
+  const [outgoingRequests, setOutgoingRequests] = useState<any[]>([]);
   const [activeConnections, setActiveConnections] = useState<any[]>([]);
   const [pendingOutgoing, setPendingOutgoing] = useState<Record<string, boolean>>({});
 
   const [connectToast, setConnectToast] = useState<string | null>(null);
   const [isScanning, setIsScanning] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+
+  useEffect(() => {
+    const channel = supabase
+      .channel('realtime_connections_channel')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'connections' },
+        () => {
+          const emailToPoll = studentEmail || localStorage.getItem('synapse_user_email') || '';
+          if (emailToPoll) fetchConnections(emailToPoll);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [studentEmail]);
 
   useEffect(() => {
     let currentEmail = '';
@@ -162,11 +181,12 @@ export default function MatchPage() {
       if (res.ok) {
         const data = await res.json();
         setIncomingRequests(data.pendingIncoming || []);
+        setOutgoingRequests(data.pendingOutgoing || []);
         setActiveConnections(data.active || []);
 
         const outgoingMap: Record<string, boolean> = {};
         (data.pendingOutgoing || []).forEach((c: any) => {
-          outgoingMap[c.recipientId] = true;
+          outgoingMap[(c.recipientId || '').toLowerCase()] = true;
         });
         setPendingOutgoing(outgoingMap);
         localStorage.setItem('synapse_pending_outgoing', JSON.stringify(outgoingMap));
@@ -260,6 +280,17 @@ export default function MatchPage() {
       }
     } catch (e) {}
 
+    let userWeakTopics: string[] = [];
+    try {
+      const tmRes = await fetch(`/api/topic-mastery?userId=${encodeURIComponent(currentEmail)}&skill=${encodeURIComponent(currentDomain)}`);
+      if (tmRes.ok) {
+        const tmData = await tmRes.json();
+        if (Array.isArray(tmData.weakTopics)) {
+          userWeakTopics = tmData.weakTopics;
+        }
+      }
+    } catch (e) {}
+
     const currentUserObj = {
       id: currentEmail || 'current_user',
       name: currentName,
@@ -267,6 +298,7 @@ export default function MatchPage() {
       domain: currentDomain,
       level: lvl,
       verified_level: userVerifiedLevel,
+      weakTopics: userWeakTopics,
       offers: activeOffers.length > 0 ? activeOffers : [currentDomain, 'Problem Solving'],
       needs: activeNeeds.length > 0 ? activeNeeds : [currentDomain === 'React' ? 'Python' : 'React', 'Algorithms'],
     };
@@ -334,7 +366,8 @@ export default function MatchPage() {
 
   const handleSendConnectionRequest = async (match: PeerMatchResult) => {
     const myId = (studentEmail || studentName).trim().toLowerCase();
-    const updatedPending = { ...pendingOutgoing, [match.peerId]: true };
+    const peerNorm = match.peerId.trim().toLowerCase();
+    const updatedPending = { ...pendingOutgoing, [peerNorm]: true };
     setPendingOutgoing(updatedPending);
     localStorage.setItem('synapse_pending_outgoing', JSON.stringify(updatedPending));
 
@@ -346,7 +379,7 @@ export default function MatchPage() {
           action: 'create',
           requesterId: myId,
           requesterName: studentName,
-          recipientId: match.peerId,
+          recipientId: peerNorm,
           recipientName: match.peerName,
           skillArea: match.primarySkill,
         }),
@@ -355,11 +388,36 @@ export default function MatchPage() {
       if (res.ok) {
         setConnectToast(`Connection request sent to ${match.peerName}! Chat unlocks once accepted.`);
         setTimeout(() => setConnectToast(null), 4500);
+        fetchConnections(studentEmail);
       }
     } catch (e) {
       setConnectToast(`Request recorded locally for ${match.peerName}`);
       setTimeout(() => setConnectToast(null), 3000);
     }
+  };
+
+  const handleCancelRequest = async (peerId: string) => {
+    const myId = (studentEmail || studentName).trim().toLowerCase();
+    const peerNorm = peerId.trim().toLowerCase();
+    const updatedPending = { ...pendingOutgoing };
+    delete updatedPending[peerNorm];
+    setPendingOutgoing(updatedPending);
+    localStorage.setItem('synapse_pending_outgoing', JSON.stringify(updatedPending));
+
+    try {
+      await fetch('/api/connections', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'cancel',
+          requesterId: myId,
+          recipientId: peerNorm,
+        }),
+      });
+      setConnectToast('Connection request cancelled.');
+      setTimeout(() => setConnectToast(null), 3000);
+      fetchConnections(studentEmail);
+    } catch (e) {}
   };
 
   const handleAcceptRequest = async (conn: any) => {
@@ -370,6 +428,8 @@ export default function MatchPage() {
         body: JSON.stringify({
           action: 'accept',
           connectionId: conn.id,
+          requesterId: conn.requesterId,
+          recipientId: conn.recipientId,
         }),
       });
 
@@ -388,6 +448,7 @@ export default function MatchPage() {
 
         setConnectToast(`Accepted request from ${conn.requesterName}! Chat is now unlocked.`);
         setTimeout(() => setConnectToast(null), 4000);
+        fetchConnections(studentEmail);
       }
     } catch (e) {}
   };
@@ -403,6 +464,7 @@ export default function MatchPage() {
         }),
       });
       setIncomingRequests((prev) => prev.filter((r) => r.id !== connId));
+      fetchConnections(studentEmail);
     } catch (e) {}
   };
 
@@ -597,8 +659,20 @@ export default function MatchPage() {
   const isAlreadyConnected = (peerId: string) => {
     const norm = peerId.trim().toLowerCase();
     return activeConnections.some(
-      (c) => c.requesterId === norm || c.recipientId === norm
+      (c) => (c.requesterId || '').toLowerCase() === norm || (c.recipientId || '').toLowerCase() === norm
     );
+  };
+
+  const isIncomingPending = (peerId: string) => {
+    const norm = peerId.trim().toLowerCase();
+    return incomingRequests.some(
+      (c) => (c.requesterId || '').toLowerCase() === norm
+    );
+  };
+
+  const isOutgoingPending = (peerId: string) => {
+    const norm = peerId.trim().toLowerCase();
+    return Boolean(pendingOutgoing[norm]);
   };
 
   return (
@@ -1100,11 +1174,18 @@ export default function MatchPage() {
                             )}
 
                             {/* Plain-Language Agent Explanation */}
-                            <div className="my-2.5 p-2.5 bg-card rounded-xl border border-border/80 text-xs text-muted leading-relaxed">
+                            <div className="my-2.5 p-2.5 bg-card rounded-xl border border-border/80 text-xs text-muted leading-relaxed space-y-1.5">
                               <span className="font-bold text-ink block mb-0.5 text-[10px] uppercase tracking-wider">
                                 Agent Match Rationale:
                               </span>
-                              {match.plainExplanation}
+                              <p>{match.plainExplanation}</p>
+                              {match.topicOverlap && match.topicOverlap.length > 0 && (
+                                <div className="pt-1 flex items-center gap-1.5 flex-wrap">
+                                  <span className="text-[10px] font-bold text-amber bg-amber/10 border border-amber/25 px-2 py-0.5 rounded-md flex items-center gap-1">
+                                    🎯 Strong in your weak topic{match.topicOverlap.length > 1 ? 's' : ''}: {match.topicOverlap.join(', ')}
+                                  </span>
+                                </div>
+                              )}
                             </div>
 
                             {/* What Peer Teaches vs Seeks */}
@@ -1210,7 +1291,7 @@ export default function MatchPage() {
                                   className="flex-1 py-2.5 px-3 bg-amber hover:bg-terracotta text-white font-bold text-xs rounded-xl shadow-xs transition-all cursor-pointer flex items-center justify-center gap-1.5 active:scale-98"
                                 >
                                   <span>💬</span>
-                                  <span>Chat Now</span>
+                                  <span>Message</span>
                                 </button>
                                 <button
                                   type="button"
@@ -1221,27 +1302,41 @@ export default function MatchPage() {
                                   <span>IDE</span>
                                 </button>
                               </div>
-                            ) : isPending ? (
-                              <div className="flex gap-2">
+                            ) : isIncomingPending(match.peerId) ? (
+                              <div className="flex items-center gap-2">
                                 <button
                                   type="button"
-                                  onClick={() =>
-                                    handleOpenInPageChat({
-                                      id: match.peerId,
-                                      name: match.peerName,
-                                      role: match.peerRole,
-                                      skill: match.primarySkill,
-                                      score: match.score,
-                                    })
-                                  }
-                                  className="flex-1 py-2.5 px-3 bg-amber/15 hover:bg-amber/25 text-amber border border-amber/30 font-bold text-xs rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                                  onClick={() => {
+                                    const conn = incomingRequests.find((r) => (r.requesterId || '').toLowerCase() === match.peerId.toLowerCase());
+                                    if (conn) handleAcceptRequest(conn);
+                                  }}
+                                  className="flex-1 py-2 px-3 bg-ok hover:bg-emerald-600 text-white text-xs font-bold rounded-xl shadow-xs transition-all cursor-pointer"
                                 >
-                                  <span>💬</span>
-                                  <span>Message Peer</span>
+                                  ✓ Accept
                                 </button>
-                                <span className="py-2.5 px-3 text-[11px] font-semibold text-muted bg-card-alt border border-border rounded-xl flex items-center gap-1">
-                                  <span>⏳</span> Pending
-                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const conn = incomingRequests.find((r) => (r.requesterId || '').toLowerCase() === match.peerId.toLowerCase());
+                                    if (conn) handleDeclineRequest(conn.id);
+                                  }}
+                                  className="py-2 px-3 bg-card hover:bg-border text-xs text-muted hover:text-bad border border-border rounded-xl transition-colors cursor-pointer"
+                                >
+                                  Decline
+                                </button>
+                              </div>
+                            ) : isOutgoingPending(match.peerId) ? (
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="flex-1 py-2 px-3 bg-amber/10 border border-amber/30 text-amber font-bold text-xs rounded-xl flex items-center justify-center gap-1.5">
+                                  <span>Requested ✓</span>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => handleCancelRequest(match.peerId)}
+                                  className="py-2 px-2 text-[11px] text-muted hover:text-bad hover:underline cursor-pointer transition-colors"
+                                >
+                                  Cancel request
+                                </button>
                               </div>
                             ) : (
                               <div className="flex gap-2">
@@ -1267,7 +1362,7 @@ export default function MatchPage() {
                                   className="flex-1 py-2.5 px-3.5 bg-amber hover:bg-terracotta text-white text-xs font-bold rounded-xl shadow-xs transition-all active:scale-98 cursor-pointer flex items-center justify-center gap-1.5"
                                 >
                                   <span>🤝</span>
-                                  <span>Connect &amp; Pair</span>
+                                  <span>Connect</span>
                                 </button>
                               </div>
                             )}
@@ -1282,13 +1377,13 @@ export default function MatchPage() {
 
             {/* TAB 2: Connection Requests Content */}
             {activeTab === 'requests' && (
-              <div>
-                {incomingRequests.length === 0 ? (
+              <div className="space-y-6">
+                {incomingRequests.length === 0 && outgoingRequests.length === 0 ? (
                   <div className="p-8 rounded-2xl border-2 border-dashed border-border bg-card-alt flex flex-col items-center text-center gap-3 animate-fade-in">
                     <span className="text-3xl">📬</span>
-                    <h3 className="text-base font-serif font-bold text-ink">No Pending Requests Yet</h3>
+                    <h3 className="text-base font-serif font-bold text-ink">No Pending Requests</h3>
                     <p className="text-xs text-muted max-w-sm">
-                      When peers on another device send you a connection invite, it will appear here. The system also checks automatically every 3 seconds!
+                      When peers send you a connection invite or you send one out, they will appear here. The system also syncs automatically!
                     </p>
                     <button
                       type="button"
@@ -1297,73 +1392,104 @@ export default function MatchPage() {
                       className="mt-2 px-4 py-2 bg-amber hover:bg-terracotta text-white text-xs font-bold rounded-xl shadow-xs transition-all cursor-pointer flex items-center gap-1.5 active:scale-98"
                     >
                       <span className={isRefreshing ? 'animate-spin' : ''}>🔄</span>
-                      <span>{isRefreshing ? 'Checking Cloud...' : 'Check for Incoming Requests'}</span>
+                      <span>{isRefreshing ? 'Checking Cloud...' : 'Refresh Requests'}</span>
                     </button>
                   </div>
                 ) : (
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between px-1 text-xs text-muted">
-                      <span>Pending Invitations ({incomingRequests.length})</span>
-                      <button
-                        type="button"
-                        onClick={handleManualRefresh}
-                        disabled={isRefreshing}
-                        className="text-xs text-amber hover:underline font-semibold flex items-center gap-1 cursor-pointer"
-                      >
-                        <span className={isRefreshing ? 'animate-spin' : ''}>🔄</span>
-                        <span>Refresh List</span>
-                      </button>
-                    </div>
-                    {incomingRequests.map((req) => (
-                      <div
-                        key={req.id}
-                        className="p-4 rounded-2xl bg-card-alt border border-border flex flex-wrap items-center justify-between gap-3 shadow-xs"
-                      >
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-full bg-amber text-white flex items-center justify-center font-bold text-sm">
-                            {req.requesterName ? req.requesterName.slice(0, 2).toUpperCase() : 'PR'}
-                          </div>
-                          <div>
-                            <h4 className="font-semibold text-ink text-sm">{req.requesterName}</h4>
-                            <p className="text-xs text-muted">
-                              Wants to collaborate on <strong>{req.skillArea || 'Programming'}</strong>
-                            </p>
-                          </div>
+                  <>
+                    {/* Incoming Section */}
+                    {incomingRequests.length > 0 && (
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between px-1 text-xs text-muted">
+                          <span className="font-bold text-ink">Incoming Invitations ({incomingRequests.length})</span>
+                          <button
+                            type="button"
+                            onClick={handleManualRefresh}
+                            disabled={isRefreshing}
+                            className="text-xs text-amber hover:underline font-semibold flex items-center gap-1 cursor-pointer"
+                          >
+                            <span className={isRefreshing ? 'animate-spin' : ''}>🔄</span>
+                            <span>Refresh</span>
+                          </button>
                         </div>
+                        {incomingRequests.map((req) => (
+                          <div
+                            key={req.id}
+                            className="p-4 rounded-2xl bg-card-alt border border-border flex flex-wrap items-center justify-between gap-3 shadow-xs"
+                          >
+                            <div className="flex items-center gap-3">
+                              <div className="w-10 h-10 rounded-full bg-amber text-white flex items-center justify-center font-bold text-sm">
+                                {req.requesterName ? req.requesterName.slice(0, 2).toUpperCase() : 'PR'}
+                              </div>
+                              <div>
+                                <h4 className="font-semibold text-ink text-sm">{req.requesterName}</h4>
+                                <p className="text-xs text-muted">
+                                  Wants to collaborate on <strong>{req.skillArea || 'Programming'}</strong>
+                                </p>
+                              </div>
+                            </div>
 
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              handleOpenInPageChat({
-                                id: req.requesterId,
-                                name: req.requesterName,
-                                skill: req.skillArea,
-                              })
-                            }
-                            className="px-3 py-2 bg-card-alt hover:bg-card border border-border text-ink font-bold text-xs rounded-xl cursor-pointer transition-colors flex items-center gap-1"
-                          >
-                            <span>💬</span>
-                            <span>Chat</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleAcceptRequest(req)}
-                            className="px-4 py-2 bg-ok hover:bg-emerald-600 text-white font-bold text-xs rounded-xl shadow-xs cursor-pointer transition-all"
-                          >
-                            Accept &amp; Pair
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleDeclineRequest(req.id)}
-                            className="px-3 py-2 bg-card border border-border hover:text-bad font-semibold text-xs rounded-xl cursor-pointer transition-colors"
-                          >
-                            Decline
-                          </button>
-                        </div>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => handleAcceptRequest(req)}
+                                className="px-4 py-2 bg-ok hover:bg-emerald-600 text-white font-bold text-xs rounded-xl shadow-xs cursor-pointer transition-all"
+                              >
+                                Accept
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeclineRequest(req.id)}
+                                className="px-3 py-2 bg-card border border-border hover:text-bad font-semibold text-xs rounded-xl cursor-pointer transition-colors"
+                              >
+                                Decline
+                              </button>
+                            </div>
+                          </div>
+                        ))}
                       </div>
-                    ))}
-                  </div>
+                    )}
+
+                    {/* Outgoing Section */}
+                    {outgoingRequests.length > 0 && (
+                      <div className="space-y-3 pt-2">
+                        <div className="flex items-center justify-between px-1 text-xs text-muted">
+                          <span className="font-bold text-ink">Sent Requests ({outgoingRequests.length})</span>
+                        </div>
+                        {outgoingRequests.map((req) => (
+                          <div
+                            key={req.id}
+                            className="p-4 rounded-2xl bg-card-alt border border-border flex flex-wrap items-center justify-between gap-3 shadow-xs"
+                          >
+                            <div className="flex items-center gap-3">
+                              <div className="w-10 h-10 rounded-full bg-amber/20 text-amber flex items-center justify-center font-bold text-sm border border-amber/30">
+                                {req.recipientName ? req.recipientName.slice(0, 2).toUpperCase() : 'PE'}
+                              </div>
+                              <div>
+                                <h4 className="font-semibold text-ink text-sm">{req.recipientName}</h4>
+                                <p className="text-xs text-muted">
+                                  Awaiting response for <strong>{req.skillArea || 'Study Session'}</strong>
+                                </p>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-semibold text-amber bg-amber/10 border border-amber/25 px-2.5 py-1 rounded-lg">
+                                Requested ✓
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => handleCancelRequest(req.recipientId)}
+                                className="px-3 py-2 bg-card hover:bg-border text-xs text-muted hover:text-bad border border-border rounded-xl transition-colors cursor-pointer"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             )}

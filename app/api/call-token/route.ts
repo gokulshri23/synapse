@@ -40,9 +40,9 @@ export async function POST(req: NextRequest) {
 
     // Generate room token / URL
     // Supports DAILY_API_KEY if configured in environment, otherwise generates a secure pair room
-    // Generate consistent room name for this pair session so both peers meet in the same room
-    const cleanSession = sessionId.replace(/[^a-zA-Z0-9_-]/g, '') || 'global_collab';
-    const roomName = `synapse-peer-${cleanSession}`;
+    // Generate deterministic room name for this pair so both peers meet in the exact same room
+    const pairSlug = [normUser, normPeer].sort().map((u) => u.split('@')[0]).join('-').replace(/[^a-zA-Z0-9_-]/g, '_');
+    const roomName = `synapse-pair-${pairSlug}`;
     const displayName = encodeURIComponent(userId.split('@')[0] || 'Peer');
 
     // Reliable open WebRTC room (works immediately on desktop and mobile browsers)
@@ -57,19 +57,28 @@ export async function POST(req: NextRequest) {
             Authorization: `Bearer ${process.env.DAILY_API_KEY}`,
           },
           body: JSON.stringify({
-            name: `${roomName}-${Date.now().toString(36)}`,
+            name: roomName,
             properties: {
               enable_chat: false,
               enable_screenshare: true,
               start_video_off: mode === 'voice',
               start_audio_off: false,
-              exp: Math.floor(Date.now() / 1000) + 3600,
+              exp: Math.floor(Date.now() / 1000) + 7200,
             },
           }),
         });
         if (dailyRes.ok) {
           const roomData = await dailyRes.json();
           callUrl = roomData.url;
+        } else if (dailyRes.status === 400) {
+          // Room might already exist, fetch existing room
+          const getRes = await fetch(`https://api.daily.co/v1/rooms/${roomName}`, {
+            headers: { Authorization: `Bearer ${process.env.DAILY_API_KEY}` },
+          });
+          if (getRes.ok) {
+            const existingRoom = await getRes.json();
+            callUrl = existingRoom.url;
+          }
         }
       } catch (e) {
         console.warn('[call-token] Daily API call failed, using secure Jitsi URL:', e);

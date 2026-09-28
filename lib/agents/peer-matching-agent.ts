@@ -77,6 +77,7 @@ export interface PeerMatchResult {
   canTeach: string[];
   wantsToLearn: string[];
   verified?: boolean;
+  topicOverlap?: string[];
 }
 
 export interface AgentActivityLog {
@@ -232,16 +233,36 @@ export function calculateMatchScore(params: {
   isReciprocal: boolean;
   isMultiHop: boolean;
   hasAvailabilityOverlap?: boolean;
-}): MatchScoreBreakdown {
+  learnerWeakTopics?: string[];
+  teacherStrongTopics?: string[];
+}): MatchScoreBreakdown & { topicOverlap: string[] } {
   const normTarget = normalizeSkillName(params.targetSkill);
   const normOffers = params.teacherOffers.map(normalizeSkillName);
 
-  // 1. Skill Match (30%)
+  // 1. Skill Match (30%) - Section 1: share of learner's Weak topics that teacher is Strong in (and verified for)
   let skillScore = 0.3;
-  if (normOffers.includes(normTarget)) {
-    skillScore = 1.0;
-  } else if (normOffers.some((o) => o.toLowerCase().includes(normTarget.toLowerCase()) || normTarget.toLowerCase().includes(o.toLowerCase()))) {
-    skillScore = 0.7;
+  let topicOverlap: string[] = [];
+
+  if (params.learnerWeakTopics && params.learnerWeakTopics.length > 0) {
+    const strongList = (params.teacherStrongTopics && params.teacherStrongTopics.length > 0)
+      ? params.teacherStrongTopics
+      : normOffers;
+    topicOverlap = params.learnerWeakTopics.filter((wt) =>
+      strongList.some((st) =>
+        st.toLowerCase() === wt.toLowerCase() ||
+        st.toLowerCase().includes(wt.toLowerCase()) ||
+        wt.toLowerCase().includes(st.toLowerCase())
+      )
+    );
+    skillScore = topicOverlap.length > 0
+      ? Math.min(1.0, Math.max(0.4, topicOverlap.length / params.learnerWeakTopics.length))
+      : 0.35;
+  } else {
+    if (normOffers.includes(normTarget)) {
+      skillScore = 1.0;
+    } else if (normOffers.some((o) => o.toLowerCase().includes(normTarget.toLowerCase()) || normTarget.toLowerCase().includes(o.toLowerCase()))) {
+      skillScore = 0.7;
+    }
   }
 
   // 2. Proficiency Balance (20%) - Zone of Proximal Development (ZPD)
@@ -300,6 +321,7 @@ export function calculateMatchScore(params: {
     networkScore,
     finalPercentage,
     formulaString,
+    topicOverlap,
   };
 }
 
@@ -317,6 +339,7 @@ export function runPeerMatchingAgent(
     offers?: string[];
     needs?: string[];
     verified_level?: number | null;
+    weakTopics?: string[];
   },
   availablePeers: Array<{
     id: string;
@@ -331,6 +354,7 @@ export function runPeerMatchingAgent(
     onboarding_complete?: boolean;
     verified_level?: number | null;
     verified?: boolean;
+    strongTopics?: string[];
   }>
 ): AgentMatchResponse {
   const logs: AgentActivityLog[] = [];
@@ -428,13 +452,17 @@ export function runPeerMatchingAgent(
       learnerTargetLevel: userTargetLevel,
       isReciprocal: canUserTeachPeer,
       isMultiHop: false,
+      learnerWeakTopics: currentUser.weakTopics,
+      teacherStrongTopics: peer.strongTopics || peerOffers,
     });
 
-    // Step 12: Plain-language decision explanation
+    // Step 12: Plain-language decision explanation with real topic overlap
     let explanation = '';
     const verifiedText = isPeerVerified ? (peerLevel >= 3 ? 'Verified Teacher' : 'Verified Peer Helper') : PROFICIENCY_LABELS[peerLevel];
     
-    if (canUserTeachPeer) {
+    if (breakdown.topicOverlap && breakdown.topicOverlap.length > 0) {
+      explanation = `${peer.name} is Strong in ${breakdown.topicOverlap.join(' and ')}, your ${breakdown.topicOverlap.length > 1 ? `${breakdown.topicOverlap.length} ` : ''}weak topic${breakdown.topicOverlap.length > 1 ? 's' : ''}.`;
+    } else if (canUserTeachPeer) {
       explanation = `Matched with ${peer.name} because they are ${verifiedText} (Level ${peerLevel}) in ${peerOffers[0] || userDomain} and can guide your growth, while you offer ${userOffers[0]} which they need. Perfect 2-way reciprocal match!`;
     } else if (peerLevel === 2 && userCurrentLevel <= 1) {
       explanation = `Matched with ${peer.name} as a ${isPeerVerified ? 'Verified Peer Helper' : 'certified Peer Helper'} (Level 2) in ${peerOffers[0] || userDomain}. They will assist you in mastering foundational concepts smoothly.`;
@@ -456,6 +484,7 @@ export function runPeerMatchingAgent(
       canTeach: peerOffers,
       wantsToLearn: peerNeeds,
       verified: isPeerVerified,
+      topicOverlap: breakdown.topicOverlap,
     });
   }
 
