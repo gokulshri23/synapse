@@ -180,6 +180,66 @@ export interface CloudDailyMission {
   submissionCode?: string;
 }
 
+// =========================================================================
+//  Study Room ("Start Learning Session") Types
+// =========================================================================
+
+export interface CloudStudyRoom {
+  id: string;
+  name: string;
+  topic: string;
+  host_id: string;
+  host_name: string;
+  type: 'pair' | 'group';
+  max_participants: number;
+  status: 'live' | 'ended';
+  daily_room_name: string;
+  daily_room_url?: string;
+  created_at: string;
+  ended_at: string | null;
+  members: Record<string, CloudStudyRoomMember>;
+  resources: CloudRoomResource[];
+  attendance: Record<string, CloudSessionAttendance>;
+  board_elements?: any[];
+}
+
+export interface CloudStudyRoomMember {
+  room_id: string;
+  user_id: string;
+  user_name: string;
+  role: 'host' | 'member';
+  invited_by?: string;
+  joined_at: string;
+}
+
+export interface CloudRoomResource {
+  id: string;
+  room_id: string;
+  user_id: string;
+  user_name: string;
+  kind: 'file' | 'link';
+  title: string;
+  url: string;
+  created_at: string;
+}
+
+export interface CloudSessionAttendance {
+  room_id: string;
+  user_id: string;
+  user_name: string;
+  joined_at: number; // epoch ms
+  last_seen: number; // epoch ms
+}
+
+export interface CloudReport {
+  id: string;
+  reporter_id: string;
+  reported_id: string;
+  room_id: string;
+  reason: string;
+  created_at: string;
+}
+
 interface CloudStoreData {
   users: Record<string, CloudUser>;
   profiles: Record<string, CloudProfile>;
@@ -201,6 +261,9 @@ interface CloudStoreData {
   video_library: VideoLibraryItem[];
   video_effectiveness: Record<string, VideoEffectivenessRecord>;
   agent_activity_logs: AgentActivityEntry[];
+  // Study Room additions
+  study_rooms: Record<string, CloudStudyRoom>;
+  reports: CloudReport[];
 }
 
 // Global in-memory cache to maintain state across hot lambda invocations
@@ -242,6 +305,8 @@ function loadStore(): CloudStoreData {
         video_library: Array.isArray(parsed.video_library) ? parsed.video_library : [],
         video_effectiveness: parsed.video_effectiveness || {},
         agent_activity_logs: Array.isArray(parsed.agent_activity_logs) ? parsed.agent_activity_logs : [],
+        study_rooms: parsed.study_rooms || {},
+        reports: Array.isArray(parsed.reports) ? parsed.reports : [],
       };
       return global.__synapse_cloud_cache;
     }
@@ -278,6 +343,8 @@ function loadStore(): CloudStoreData {
     video_library: [],
     video_effectiveness: {},
     agent_activity_logs: [],
+    study_rooms: {},
+    reports: [],
   };
 
   global.__synapse_cloud_cache = initial;
@@ -1625,5 +1692,391 @@ export function getAgentActivityLogs(limit = 50): AgentActivityEntry[] {
   const store = loadStore();
   return (store.agent_activity_logs || []).slice(0, limit);
 }
+
+// =========================================================================
+//  STUDY ROOM — "Start Learning Session" Operations & Free Minutes Guard
+// =========================================================================
+
+/**
+ * Calculates total participant-minutes for the current calendar month across all sessions.
+ * Free-minutes guard limit: 8,000 participant-minutes.
+ */
+export function getMonthlyParticipantMinutes(): number {
+  const store = loadStore();
+  const now = new Date();
+  const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+
+  let totalMinutes = 0;
+  for (const room of Object.values(store.study_rooms || {})) {
+    const roomCreated = new Date(room.created_at).getTime();
+    if (roomCreated >= currentMonthStart) {
+      for (const att of Object.values(room.attendance || {})) {
+        const durationMs = Math.max(0, (att.last_seen || att.joined_at) - att.joined_at);
+        totalMinutes += Math.round(durationMs / 60000);
+      }
+    }
+  }
+  return totalMinutes;
+}
+
+/**
+ * Retrieves all live study rooms, enriched with active learner count, host teacher status,
+ * and automatically ending stale/empty rooms (5 min empty rule, 90 min max duration rule).
+ */
+export function getLiveStudyRooms(): Array<CloudStudyRoom & {
+  currentLearnerCount: number;
+  isFull: boolean;
+  hostVerifiedTeacher: boolean;
+  minutesRemaining: number;
+}> {
+  const store = loadStore();
+  const now = Date.now();
+  const rooms = Object.values(store.study_rooms || {});
+  const activeRooms: Array<any> = [];
+
+  for (const room of rooms) {
+    if (room.status !== 'live') continue;
+
+    const createdAt = new Date(room.created_at).getTime();
+    const ageMinutes = (now - createdAt) / 60000;
+
+    // Rule 1: Session auto-ends after 90 minutes
+    if (ageMinutes >= 90) {
+      room.status = 'ended';
+      room.ended_at = new Date().toISOString();
+      continue;
+    }
+
+    // Calculate active participants (heartbeat within last 45 seconds)
+    const activeMembers = Object.values(room.attendance || {}).filter(
+      (a) => now - (a.last_seen || 0) <= 45000
+    );
+    const learnerCount = activeMembers.length;
+
+    // Rule 2: An empty room ends after 5 minutes of 0 active learners
+    if (ageMinutes >= 5 && learnerCount === 0) {
+      room.status = 'ended';
+      room.ended_at = new Date().toISOString();
+      continue;
+    }
+
+    // Check if host has verified_level >= 3 or verified badge
+    const hostPeer = store.peers[room.host_id.toLowerCase()];
+    const hostProfile = store.profiles[room.host_id.toLowerCase()];
+    const hostDecls = store.skill_declarations[room.host_id.toLowerCase()] || [];
+    const isTeacher = Boolean(
+      (hostPeer && (hostPeer.verified_level || 0) >= 3) ||
+      (hostProfile && (hostProfile.numeric_level || 0) >= 3) ||
+      hostDecls.some((d) => d.status === 'verified' && d.verified_level >= 3)
+    );
+
+    const isFull = learnerCount >= room.max_participants;
+    const minutesRemaining = Math.max(0, Math.round(90 - ageMinutes));
+
+    activeRooms.push({
+      ...room,
+      currentLearnerCount: learnerCount,
+      isFull,
+      hostVerifiedTeacher: isTeacher,
+      minutesRemaining,
+    });
+  }
+
+  saveStore(store);
+  return activeRooms;
+}
+
+export function getStudyRoom(roomId: string): CloudStudyRoom | null {
+  const store = loadStore();
+  return store.study_rooms[roomId] || null;
+}
+
+export function createStudyRoom(data: {
+  name: string;
+  topic: string;
+  host_id: string;
+  host_name: string;
+  type: 'pair' | 'group';
+  max_participants: number;
+  daily_room_name: string;
+  daily_room_url?: string;
+}): { success: boolean; room?: CloudStudyRoom; error?: string } {
+  const store = loadStore();
+
+  // Free-minutes guard: above 8,000 participant-minutes, disable creating NEW group rooms
+  if (data.type === 'group') {
+    const totalMinutes = getMonthlyParticipantMinutes();
+    if (totalMinutes >= 8000) {
+      return {
+        success: false,
+        error: 'Study rooms are resting for this month. 1-on-1 pair calls are still available.',
+      };
+    }
+  }
+
+  const roomId = `room_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  const nowStr = new Date().toISOString();
+
+  const newRoom: CloudStudyRoom = {
+    id: roomId,
+    name: data.name,
+    topic: data.topic,
+    host_id: data.host_id.toLowerCase(),
+    host_name: data.host_name,
+    type: data.type,
+    max_participants: Math.min(10, Math.max(data.type === 'pair' ? 2 : 3, data.max_participants || 6)),
+    status: 'live',
+    daily_room_name: data.daily_room_name,
+    daily_room_url: data.daily_room_url,
+    created_at: nowStr,
+    ended_at: null,
+    members: {
+      [data.host_id.toLowerCase()]: {
+        room_id: roomId,
+        user_id: data.host_id.toLowerCase(),
+        user_name: data.host_name,
+        role: 'host',
+        joined_at: nowStr,
+      },
+    },
+    resources: [],
+    attendance: {
+      [data.host_id.toLowerCase()]: {
+        room_id: roomId,
+        user_id: data.host_id.toLowerCase(),
+        user_name: data.host_name,
+        joined_at: Date.now(),
+        last_seen: Date.now(),
+      },
+    },
+  };
+
+  store.study_rooms[roomId] = newRoom;
+  saveStore(store);
+
+  logAgentActivity(
+    'System',
+    `Created ${data.type} study room: ${data.name}`,
+    `Room provisioned for ${data.topic} with ${newRoom.max_participants} max participants`,
+    { roomId, host: data.host_name, topic: data.topic }
+  );
+
+  return { success: true, room: newRoom };
+}
+
+export function joinStudyRoom(
+  roomId: string,
+  userId: string,
+  userName: string,
+  role: 'host' | 'member' = 'member',
+  invitedBy?: string
+): { success: boolean; room?: CloudStudyRoom; error?: string } {
+  const store = loadStore();
+  const room = store.study_rooms[roomId];
+
+  if (!room || room.status !== 'live') {
+    return { success: false, error: 'Room does not exist or has ended' };
+  }
+
+  const normUser = userId.toLowerCase();
+  const now = Date.now();
+
+  // Check if room is full (if user is not already a member)
+  const activeCount = Object.values(room.attendance || {}).filter(
+    (a) => now - (a.last_seen || 0) <= 45000 && a.user_id !== normUser
+  ).length;
+
+  if (activeCount >= room.max_participants) {
+    return { success: false, error: 'Room is full' };
+  }
+
+  // Add or update member
+  room.members[normUser] = {
+    room_id: roomId,
+    user_id: normUser,
+    user_name: userName,
+    role: room.host_id === normUser ? 'host' : role,
+    invited_by: invitedBy,
+    joined_at: room.members[normUser]?.joined_at || new Date().toISOString(),
+  };
+
+  // Update attendance
+  if (!room.attendance[normUser]) {
+    room.attendance[normUser] = {
+      room_id: roomId,
+      user_id: normUser,
+      user_name: userName,
+      joined_at: now,
+      last_seen: now,
+    };
+  } else {
+    room.attendance[normUser].last_seen = now;
+  }
+
+  saveStore(store);
+  return { success: true, room };
+}
+
+export function updateStudyRoomAttendance(roomId: string, userId: string, userName: string): boolean {
+  const store = loadStore();
+  const room = store.study_rooms[roomId];
+  if (!room || room.status !== 'live') return false;
+
+  const normUser = userId.toLowerCase();
+  const now = Date.now();
+
+  if (!room.attendance[normUser]) {
+    room.attendance[normUser] = {
+      room_id: roomId,
+      user_id: normUser,
+      user_name: userName,
+      joined_at: now,
+      last_seen: now,
+    };
+  } else {
+    room.attendance[normUser].last_seen = now;
+  }
+
+  saveStore(store);
+  return true;
+}
+
+export function leaveStudyRoom(
+  roomId: string,
+  userId: string
+): { success: boolean; durationMinutes: number; eligibleForXp: boolean; xpAwarded: number } {
+  const store = loadStore();
+  const room = store.study_rooms[roomId];
+  if (!room) return { success: false, durationMinutes: 0, eligibleForXp: false, xpAwarded: 0 };
+
+  const normUser = userId.toLowerCase();
+  const att = room.attendance[normUser];
+  const now = Date.now();
+
+  let durationMinutes = 0;
+  if (att) {
+    att.last_seen = now;
+    durationMinutes = Math.round((now - att.joined_at) / 60000);
+  }
+
+  // XP integrity: XP awarded only after at least 10 real minutes in room
+  const eligibleForXp = durationMinutes >= 10;
+  const xpAwarded = eligibleForXp ? 50 : 0;
+
+  saveStore(store);
+  return { success: true, durationMinutes, eligibleForXp, xpAwarded };
+}
+
+export function endStudyRoom(roomId: string, endedBy: string): { success: boolean; summary?: any } {
+  const store = loadStore();
+  const room = store.study_rooms[roomId];
+  if (!room) return { success: false };
+
+  room.status = 'ended';
+  room.ended_at = new Date().toISOString();
+
+  const totalLearners = Object.keys(room.attendance || {}).length;
+  const createdAt = new Date(room.created_at).getTime();
+  const durationMin = Math.round((Date.now() - createdAt) / 60000);
+
+  logAgentActivity(
+    'System',
+    `Study room ended: ${room.name}`,
+    `Session completed: ${durationMin} min duration with ${totalLearners} attendees`,
+    { roomId, durationMin, totalLearners, endedBy }
+  );
+
+  saveStore(store);
+  return {
+    success: true,
+    summary: {
+      roomId,
+      name: room.name,
+      topic: room.topic,
+      durationMinutes: durationMin,
+      totalLearners,
+      attendees: Object.values(room.attendance).map((a) => a.user_name),
+    },
+  };
+}
+
+export function addRoomResource(
+  roomId: string,
+  userId: string,
+  userName: string,
+  kind: 'file' | 'link',
+  title: string,
+  url: string
+): CloudRoomResource | null {
+  const store = loadStore();
+  const room = store.study_rooms[roomId];
+  if (!room) return null;
+
+  const resItem: CloudRoomResource = {
+    id: `res_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+    room_id: roomId,
+    user_id: userId,
+    user_name: userName,
+    kind,
+    title,
+    url,
+    created_at: new Date().toISOString(),
+  };
+
+  room.resources.push(resItem);
+  saveStore(store);
+  return resItem;
+}
+
+export function getRoomResources(roomId: string): CloudRoomResource[] {
+  const store = loadStore();
+  const room = store.study_rooms[roomId];
+  return room ? room.resources || [] : [];
+}
+
+export function createReport(
+  reporterId: string,
+  reportedId: string,
+  roomId: string,
+  reason: string
+): CloudReport {
+  const store = loadStore();
+  const rep: CloudReport = {
+    id: `rep_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+    reporter_id: reporterId,
+    reported_id: reportedId,
+    room_id: roomId,
+    reason,
+    created_at: new Date().toISOString(),
+  };
+
+  store.reports.push(rep);
+  saveStore(store);
+
+  logAgentActivity(
+    'System',
+    `User Report Filed`,
+    `Report filed against ${reportedId} in session ${roomId}: "${reason}"`,
+    { reporterId, reportedId, roomId }
+  );
+
+  return rep;
+}
+
+export function updateRoomBoard(roomId: string, elements: any[]): boolean {
+  const store = loadStore();
+  const room = store.study_rooms[roomId];
+  if (!room) return false;
+  room.board_elements = elements;
+  saveStore(store);
+  return true;
+}
+
+export function getRoomBoard(roomId: string): any[] {
+  const store = loadStore();
+  const room = store.study_rooms[roomId];
+  return room?.board_elements || [];
+}
+
 
 

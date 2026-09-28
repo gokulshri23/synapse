@@ -1,6 +1,8 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import PreJoinModal from '@/components/call/PreJoinModal';
+import StudyRoomView from '@/components/call/StudyRoomView';
 
 // ─── Types ────────────────────────────────────────────────────
 interface ChatMessage {
@@ -143,6 +145,25 @@ function useAsync(asyncFn) {
     messageId: string;
   } | null>(null);
   const dismissedCallIdsRef = useRef<Set<string>>(new Set());
+
+  // ─── Study Rooms ("Start Learning Session") State ────────────
+  const [studyRooms, setStudyRooms] = useState<any[]>([]);
+  const [showCreateRoomModal, setShowCreateRoomModal] = useState(false);
+  const [newRoomName, setNewRoomName] = useState('');
+  const [newRoomTopic, setNewRoomTopic] = useState('');
+  const [newRoomCapacity, setNewRoomCapacity] = useState(6);
+  const [isCreatingRoom, setIsCreatingRoom] = useState(false);
+
+  // Pre-join & Active In-Room State
+  const [preJoinRoom, setPreJoinRoom] = useState<any | null>(null);
+  const [activeStudyRoom, setActiveStudyRoom] = useState<{
+    room: any;
+    token?: string;
+    roomUrl?: string;
+    initialVideo: boolean;
+    initialAudio: boolean;
+    isHost: boolean;
+  } | null>(null);
 
   // ─── Part 5: AI Study Assistant (Tiers 1, 2, 3) ───────────────
   const [studyAssistantBanner, setStudyAssistantBanner] = useState<string | null>(null);
@@ -458,6 +479,115 @@ function useAsync(asyncFn) {
     const interval = setInterval(fetchActivityLogs, 5000);
     return () => clearInterval(interval);
   }, []);
+
+  // ─── Study Rooms Fetching & Polling ───────────────────────────
+  const fetchStudyRooms = useCallback(async () => {
+    try {
+      const res = await fetch('/api/study-rooms?action=list');
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.rooms)) {
+          setStudyRooms(data.rooms);
+        }
+      }
+    } catch (e) {}
+  }, []);
+
+  useEffect(() => {
+    fetchStudyRooms();
+    const interval = setInterval(fetchStudyRooms, 4000);
+    return () => clearInterval(interval);
+  }, [fetchStudyRooms]);
+
+  const handleCreateStudyRoom = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newRoomName.trim()) return;
+    setIsCreatingRoom(true);
+    try {
+      const res = await fetch('/api/study-rooms', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'create',
+          name: newRoomName.trim(),
+          topic: newRoomTopic.trim() || studentTrack,
+          hostId: studentEmail || studentName,
+          hostName: studentName,
+          type: 'group',
+          maxParticipants: newRoomCapacity,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        showToast(data.error || 'Could not create study room');
+        return;
+      }
+      setShowCreateRoomModal(false);
+      setNewRoomName('');
+      setPreJoinRoom({
+        room: data.room,
+        token: data.token,
+        roomUrl: data.roomUrl,
+        isHost: true,
+      });
+      fetchStudyRooms();
+    } catch (e) {
+      showToast('Error creating study room');
+    } finally {
+      setIsCreatingRoom(false);
+    }
+  };
+
+  const handleInitiateJoin = (targetRoom: any) => {
+    setPreJoinRoom({
+      room: targetRoom,
+      isHost: targetRoom.host_id.toLowerCase() === (studentEmail || studentName).toLowerCase(),
+    });
+  };
+
+  const handlePreJoinConfirm = async (settings: {
+    displayName: string;
+    videoEnabled: boolean;
+    audioEnabled: boolean;
+  }) => {
+    if (!preJoinRoom) return;
+    const targetRoom = preJoinRoom.room;
+
+    try {
+      const res = await fetch('/api/study-rooms', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'token',
+          roomId: targetRoom.id,
+          userId: studentEmail || studentName,
+          userName: settings.displayName || studentName,
+          startVideoOff: !settings.videoEnabled,
+          startAudioOff: !settings.audioEnabled,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        showToast(data.error || "You can't join this room");
+        setPreJoinRoom(null);
+        return;
+      }
+
+      setActiveStudyRoom({
+        room: data.room || targetRoom,
+        token: data.token || preJoinRoom.token,
+        roomUrl: data.roomUrl || preJoinRoom.roomUrl,
+        initialVideo: settings.videoEnabled,
+        initialAudio: settings.audioEnabled,
+        isHost: Boolean(data.isHost || preJoinRoom.isHost),
+      });
+      setPreJoinRoom(null);
+    } catch (e) {
+      showToast('Failed to connect to study session');
+      setPreJoinRoom(null);
+    }
+  };
 
   // ─── Study Assistant Check Trigger ──────────────────────────
   const triggerStudyAssistantCheck = async (recentMsgs: ChatMessage[]) => {
@@ -1208,6 +1338,241 @@ function useAsync(asyncFn) {
           </div>
         </div>
       )}
+
+      {/* ─── Active Fullscreen Study Room View ─────────────────────── */}
+      {activeStudyRoom && (
+        <StudyRoomView
+          room={activeStudyRoom.room}
+          currentUser={{
+            email: studentEmail || studentName,
+            name: studentName,
+            isHost: activeStudyRoom.isHost,
+          }}
+          token={activeStudyRoom.token}
+          roomUrl={activeStudyRoom.roomUrl}
+          initialVideoEnabled={activeStudyRoom.initialVideo}
+          initialAudioEnabled={activeStudyRoom.initialAudio}
+          onLeave={(summary) => {
+            setActiveStudyRoom(null);
+            if (summary?.xpAwarded) {
+              const nextXp = userXp + summary.xpAwarded;
+              setUserXp(nextXp);
+              localStorage.setItem('synapse_user_xp', nextXp.toString());
+              showToast(`🎉 Learning session completed! +${summary.xpAwarded} XP awarded.`);
+            }
+            fetchStudyRooms();
+          }}
+        />
+      )}
+
+      {/* ─── Pre-Join Device Check Modal ─────────────────────────── */}
+      {preJoinRoom && (
+        <PreJoinModal
+          roomName={preJoinRoom.room.name}
+          topic={preJoinRoom.room.topic}
+          defaultUserName={studentName}
+          isOpen={true}
+          onJoin={handlePreJoinConfirm}
+          onCancel={() => setPreJoinRoom(null)}
+        />
+      )}
+
+      {/* ─── Start Learning Session Dialog ──────────────────────── */}
+      {showCreateRoomModal && (
+        <div className="fixed inset-0 z-[160] bg-ink/75 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
+          <div className="bg-card border border-border rounded-[24px] max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-2 border-b border-border">
+              <div>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-amber block">
+                  New Collaborative Room
+                </span>
+                <h3 className="font-serif font-bold text-base text-ink">Start Learning Session</h3>
+              </div>
+              <button
+                onClick={() => setShowCreateRoomModal(false)}
+                className="w-7 h-7 rounded-full bg-card-alt border border-border flex items-center justify-center text-xs text-muted hover:text-ink cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateStudyRoom} className="space-y-3.5 text-xs">
+              <div>
+                <label className="font-semibold uppercase text-muted text-[11px] block mb-1">
+                  Session Title
+                </label>
+                <input
+                  required
+                  value={newRoomName}
+                  onChange={(e) => setNewRoomName(e.target.value)}
+                  placeholder={`e.g. ${studentTrack} Deep Dive & Code Review`}
+                  className="w-full p-2.5 bg-card-alt border border-border rounded-xl text-ink outline-none focus:border-amber"
+                />
+              </div>
+
+              <div>
+                <label className="font-semibold uppercase text-muted text-[11px] block mb-1">
+                  Topic / Skill Domain
+                </label>
+                <input
+                  required
+                  value={newRoomTopic}
+                  onChange={(e) => setNewRoomTopic(e.target.value)}
+                  placeholder="e.g. React, Python, Machine Learning"
+                  className="w-full p-2.5 bg-card-alt border border-border rounded-xl text-ink outline-none focus:border-amber"
+                />
+              </div>
+
+              <div>
+                <label className="font-semibold uppercase text-muted text-[11px] block mb-1">
+                  Max Participants: <span className="text-amber font-bold">{newRoomCapacity} learners</span> (3 to 10)
+                </label>
+                <div className="flex items-center gap-3 pt-1">
+                  <input
+                    type="range"
+                    min="3"
+                    max="10"
+                    value={newRoomCapacity}
+                    onChange={(e) => setNewRoomCapacity(parseInt(e.target.value, 10))}
+                    className="flex-1 accent-amber cursor-pointer"
+                  />
+                  <span className="font-bold text-ink w-6 text-right">{newRoomCapacity}</span>
+                </div>
+              </div>
+
+              <div className="p-3 bg-amber/10 border border-amber/25 rounded-xl text-[11px] text-muted space-y-1">
+                <p className="font-semibold text-ink flex items-center gap-1.5">
+                  <span>🔒</span> Privacy &amp; Recording Notice
+                </p>
+                <p>This session is not recorded. Video &amp; audio streams are encrypted WebRTC.</p>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-border">
+                <button
+                  type="button"
+                  onClick={() => setShowCreateRoomModal(false)}
+                  className="px-4 py-2 bg-card-alt border border-border rounded-xl font-semibold text-ink cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isCreatingRoom || !newRoomName.trim()}
+                  className="px-5 py-2 bg-amber hover:bg-terracotta text-white font-bold rounded-xl shadow-xs transition-all disabled:opacity-50 cursor-pointer flex items-center gap-1.5"
+                >
+                  {isCreatingRoom ? 'Creating Room...' : 'Start Session 🚀'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ─── Group Study Rooms: "Start Learning Session" Lobby ─── */}
+      <div className="bg-card border border-border rounded-[24px] p-5 sm:p-6 shadow-xs space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-border">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-xl">🎓</span>
+              <h3 className="text-lg font-serif font-bold text-ink">Live Learning Sessions</h3>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 border border-emerald-500/30">
+                🟢 Live Rooms
+              </span>
+            </div>
+            <p className="text-xs text-muted mt-0.5">
+              Multi-learner video study rooms with group screen share, collaborative whiteboard, and real-time chat.
+            </p>
+          </div>
+
+          <button
+            onClick={() => {
+              setNewRoomTopic(studentTrack);
+              setShowCreateRoomModal(true);
+            }}
+            className="px-4 py-2.5 bg-amber hover:bg-terracotta text-white font-bold text-xs rounded-xl shadow-xs transition-transform active:scale-95 flex items-center gap-1.5 cursor-pointer"
+          >
+            <span>+</span> Start Learning Session
+          </button>
+        </div>
+
+        {/* Live Study Room Cards List */}
+        {studyRooms.length > 0 ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5 pt-1">
+            {studyRooms.map((room) => (
+              <div
+                key={room.id}
+                className="p-4 bg-card-alt rounded-2xl border border-border hover:border-amber/50 transition-all flex flex-col justify-between space-y-3 shadow-2xs"
+              >
+                <div>
+                  <div className="flex items-center justify-between gap-2 mb-1.5">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-amber px-2 py-0.5 bg-amber/10 rounded-md border border-amber/20">
+                      {room.topic}
+                    </span>
+                    <span className="text-[11px] font-medium text-emerald-600 flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                      Active session
+                    </span>
+                  </div>
+
+                  <h4 className="font-serif font-bold text-sm text-ink truncate">{room.name}</h4>
+                  <div className="flex items-center gap-1.5 text-xs text-muted mt-1">
+                    <span>Host: {room.host_name}</span>
+                    {room.hostVerifiedTeacher && (
+                      <span className="text-[10px] font-bold text-emerald-600 bg-emerald-500/10 px-1.5 py-0.2 rounded border border-emerald-500/20">
+                        Verified teacher ✓
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between pt-2 border-t border-border/60">
+                  <span className="text-xs font-semibold text-ink flex items-center gap-1.5">
+                    <span>👥</span> {room.currentLearnerCount || 1} / {room.max_participants} learners
+                  </span>
+
+                  {room.isFull ? (
+                    <button
+                      disabled
+                      className="px-3 py-1.5 bg-muted/20 text-muted rounded-xl text-xs font-bold cursor-not-allowed"
+                    >
+                      Room Full
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => handleInitiateJoin(room)}
+                      className="px-3.5 py-1.5 bg-card border border-border hover:border-amber text-ink font-bold text-xs rounded-xl shadow-2xs transition-colors cursor-pointer flex items-center gap-1"
+                    >
+                      Join Session →
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          /* Empty State */
+          <div className="py-8 text-center space-y-3 bg-card-alt/50 rounded-2xl border border-dashed border-border p-6">
+            <div className="w-12 h-12 rounded-full bg-amber/15 text-amber flex items-center justify-center text-2xl mx-auto">
+              📚
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-ink">No live sessions yet</p>
+              <p className="text-xs text-muted max-w-sm mx-auto mt-0.5">
+                Host a group study session on {studentTrack} or collaborate on code with your peers.
+              </p>
+            </div>
+            <button
+              onClick={() => {
+                setNewRoomTopic(studentTrack);
+                setShowCreateRoomModal(true);
+              }}
+              className="px-4 py-2 bg-amber hover:bg-terracotta text-white font-bold text-xs rounded-xl shadow-xs transition-colors cursor-pointer"
+            >
+              Start Learning Session
+            </button>
+          </div>
+        )}
+      </div>
 
       {/* Session Header with peer info & Live Calling Buttons */}
       <div className="bg-card border border-border rounded-[22px] p-5 shadow-xs flex flex-wrap items-center justify-between gap-4">

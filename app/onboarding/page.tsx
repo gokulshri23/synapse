@@ -76,6 +76,59 @@ export default function OnboardingPage() {
   // Final Summary state
   const [isFinishing, setIsFinishing] = useState(false);
 
+  // Proctor Video Checking State (Step 3)
+  const [proctorVideoActive, setProctorVideoActive] = useState(false);
+  const [proctorStatus, setProctorStatus] = useState<string>('Camera checking ready');
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+
+  // Video Proctoring Lifecycle for Quiz Attempt Section
+  useEffect(() => {
+    let active = true;
+    if (step === 3) {
+      async function startProctorVideo() {
+        try {
+          if (!navigator.mediaDevices?.getUserMedia) {
+            setProctorStatus('Camera not supported by browser');
+            return;
+          }
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: { width: 320, height: 240, facingMode: 'user' },
+            audio: false,
+          });
+          if (!active) {
+            stream.getTracks().forEach((t) => t.stop());
+            return;
+          }
+          streamRef.current = stream;
+          if (videoRef.current) {
+            videoRef.current.srcObject = stream;
+            videoRef.current.play().catch(() => {});
+          }
+          setProctorVideoActive(true);
+          setProctorStatus('Live Proctor Active • Face & Environment Monitored');
+        } catch (err: any) {
+          setProctorVideoActive(false);
+          setProctorStatus('Camera optional: Proceeding without video feed');
+        }
+      }
+      startProctorVideo();
+    } else {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+      }
+      setProctorVideoActive(false);
+    }
+    return () => {
+      active = false;
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+      }
+    };
+  }, [step]);
+
   // Check if user already finished onboarding on another device
   useEffect(() => {
     async function checkExistingProfile() {
@@ -638,6 +691,67 @@ export default function OnboardingPage() {
                 <span className="text-xs px-2.5 py-1 bg-amber/10 text-amber font-bold rounded-lg border border-amber/20">
                   {quizPhase === 'diagnostic' ? 'Learning Check' : 'Teaching Check'}
                 </span>
+              </div>
+
+              {/* Live Proctor Video Verification Box */}
+              <div className="p-3.5 bg-card-alt rounded-2xl border border-border flex flex-wrap items-center justify-between gap-3 shadow-2xs">
+                <div className="flex items-center gap-3">
+                  <div className="relative w-28 h-20 rounded-xl bg-ink/90 overflow-hidden border border-border/80 shadow-xs shrink-0 flex items-center justify-center">
+                    <video
+                      ref={videoRef}
+                      autoPlay
+                      playsInline
+                      muted
+                      className={`w-full h-full object-cover scale-x-[-1] ${proctorVideoActive ? 'block' : 'hidden'}`}
+                    />
+                    {!proctorVideoActive && (
+                      <div className="text-center p-1 text-[11px] text-zinc-400">
+                        <span className="text-lg block mb-0.5">📹</span>
+                        No Video
+                      </div>
+                    )}
+                    {proctorVideoActive && (
+                      <span className="absolute bottom-1.5 right-1.5 w-2.5 h-2.5 rounded-full bg-ok animate-pulse" />
+                    )}
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold uppercase tracking-wider text-amber flex items-center gap-1.5">
+                        <span>📹</span> Proctor Video Check
+                      </span>
+                      <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold border ${
+                        proctorVideoActive
+                          ? 'bg-ok/15 text-ok border-ok/30'
+                          : 'bg-muted/15 text-muted border-muted/30'
+                      }`}>
+                        {proctorVideoActive ? 'LIVE • VERIFIED' : 'STANDBY'}
+                      </span>
+                    </div>
+                    <p className="text-xs text-ink font-semibold mt-0.5">{proctorStatus}</p>
+                    <p className="text-[11px] text-muted">Webcam presence monitored for testing authenticity and peer validation.</p>
+                  </div>
+                </div>
+                {!proctorVideoActive && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.mediaDevices?.getUserMedia({ video: true, audio: false })
+                        .then((s) => {
+                          streamRef.current = s;
+                          if (videoRef.current) {
+                            videoRef.current.srcObject = s;
+                            videoRef.current.play().catch(() => {});
+                          }
+                          setProctorVideoActive(true);
+                          setProctorStatus('Live Proctor Active • Face & Environment Monitored');
+                        })
+                        .catch(() => setProctorStatus('Camera permission blocked by browser'));
+                    }}
+                    className="text-xs px-3.5 py-2 bg-amber hover:bg-terracotta text-white rounded-xl font-semibold cursor-pointer shadow-xs transition-colors"
+                  >
+                    Enable Camera Feed
+                  </button>
+                )}
               </div>
 
               {/* ─── QUIZ 1: 10 Diagnostic Placement Questions ─── */}

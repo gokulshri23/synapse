@@ -312,3 +312,68 @@ CREATE POLICY "Allow all authenticated users" ON public.video_library FOR ALL TO
 CREATE POLICY "Allow all authenticated users" ON public.video_effectiveness FOR ALL TO authenticated USING (true);
 CREATE POLICY "Allow all authenticated users" ON public.agent_activity_logs FOR ALL TO authenticated USING (true);
 
+-- =========================================================================
+--  Study Room ("Start Learning Session") DDL
+-- =========================================================================
+
+CREATE TABLE IF NOT EXISTS public.study_rooms (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  topic TEXT NOT NULL,
+  host_id TEXT NOT NULL,
+  type TEXT NOT NULL CHECK (type IN ('pair', 'group')),
+  max_participants INTEGER DEFAULT 6,
+  status TEXT NOT NULL DEFAULT 'live' CHECK (status IN ('live', 'ended')),
+  daily_room_name TEXT NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+  ended_at TIMESTAMP WITH TIME ZONE
+);
+
+CREATE TABLE IF NOT EXISTS public.study_room_members (
+  room_id TEXT REFERENCES public.study_rooms(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('host', 'member')),
+  invited_by TEXT,
+  PRIMARY KEY (room_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS public.room_resources (
+  id TEXT PRIMARY KEY,
+  room_id TEXT REFERENCES public.study_rooms(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('file', 'link')),
+  title TEXT NOT NULL,
+  url TEXT NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS public.session_attendance (
+  room_id TEXT REFERENCES public.study_rooms(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL,
+  joined_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+  last_seen TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+  PRIMARY KEY (room_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS public.reports (
+  id TEXT PRIMARY KEY,
+  reporter_id TEXT NOT NULL,
+  reported_id TEXT NOT NULL,
+  room_id TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+ALTER TABLE public.study_rooms ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.study_room_members ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.room_resources ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.session_attendance ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.reports ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Allow authenticated study_rooms" ON public.study_rooms FOR ALL TO authenticated USING (true);
+CREATE POLICY "Allow authenticated study_room_members" ON public.study_room_members FOR ALL TO authenticated USING (true);
+CREATE POLICY "Allow authenticated room_resources" ON public.room_resources FOR ALL TO authenticated USING (true);
+CREATE POLICY "Allow authenticated session_attendance" ON public.session_attendance FOR ALL TO authenticated USING (true);
+CREATE POLICY "Allow authenticated reports" ON public.reports FOR ALL TO authenticated USING (true);
+
+

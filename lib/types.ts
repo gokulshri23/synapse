@@ -326,7 +326,7 @@ export interface VideoEffectivenessRecord {
 export interface AgentActivityEntry {
   id: string;
   timestamp: string;
-  agent: 'Planner' | 'Matcher' | 'Adaptation' | 'StudyAssistant' | 'Assessment' | 'Evaluation';
+  agent: 'Planner' | 'Matcher' | 'Adaptation' | 'StudyAssistant' | 'Assessment' | 'Evaluation' | 'System';
   action: string;
   reason: string;
   details?: Record<string, any>;

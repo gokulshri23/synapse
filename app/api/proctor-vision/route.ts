@@ -50,7 +50,7 @@ Respond strictly with a JSON object (no markdown, no backticks, just raw JSON):
 }`;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-3.6-flash',
+      model: 'gemini-2.0-flash',
       contents: [
         {
           role: 'user',
