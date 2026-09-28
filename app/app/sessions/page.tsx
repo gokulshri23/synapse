@@ -1559,13 +1559,13 @@ function useAsync(asyncFn) {
             )}
 
             {/* Call Screen / Frame */}
-            <div className="h-72 bg-ink/90 rounded-2xl flex flex-col items-center justify-center text-white relative overflow-hidden">
+            <div className="h-[400px] bg-ink/90 rounded-2xl flex flex-col items-center justify-center text-white relative overflow-hidden">
               {callUrl ? (
                 <iframe
                   src={callUrl}
-                  allow="camera; microphone; fullscreen; display-capture"
+                  allow="camera; microphone; fullscreen; display-capture; autoplay; clipboard-write"
                   className="w-full h-full border-0 rounded-2xl"
-                  title="Daily.co Live Call"
+                  title="Synapse Live WebRTC Call"
                 />
               ) : (
                 <div className="text-center space-y-3">
@@ -1578,10 +1578,22 @@ function useAsync(asyncFn) {
               )}
             </div>
 
-            <div className="flex items-center justify-between pt-2">
-              <span className="text-xs text-muted">
-                {callMode === 'voice' ? 'Camera is muted by default for voice calls' : 'Video & Audio active'}
-              </span>
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-muted">
+                  {callMode === 'voice' ? 'Audio active (camera muted by default)' : 'Video & Audio encrypted'}
+                </span>
+                {callUrl && (
+                  <a
+                    href={callUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs px-2.5 py-1 bg-card-alt border border-border text-amber hover:underline rounded-lg font-medium flex items-center gap-1"
+                  >
+                    <span>↗</span> Open in New Window
+                  </a>
+                )}
+              </div>
               <button
                 onClick={handleEndCall}
                 className="py-2.5 px-6 bg-bad hover:bg-red-700 text-white font-bold text-xs rounded-xl shadow-xs cursor-pointer"

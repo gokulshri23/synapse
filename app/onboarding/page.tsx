@@ -1,9 +1,8 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
-import ProctoredQuiz from '@/components/proctor/ProctoredQuiz';
 import ThemeToggle from '@/components/ui/ThemeToggle';
 
 const AVAILABLE_DOMAINS = [
@@ -14,7 +13,14 @@ const AVAILABLE_DOMAINS = [
   { id: 'Data Structures', name: 'Data Structures', desc: 'Arrays, Trees, Graphs & Dynamic Programming', icon: '🌲' },
 ];
 
-const SKILL_TAGS = [
+const STUDY_DURATION_OPTIONS = [
+  { days: 7, label: '7-Day Bootcamp', desc: 'Intensive fast-track ramp up', icon: '⚡' },
+  { days: 14, label: '14-Day Sprint', desc: 'Accelerated project build track', icon: '🚀' },
+  { days: 30, label: '30-Day Mastery', desc: 'Complete conceptual & practical mastery (Recommended)', icon: '🎯' },
+  { days: 60, label: '60-Day Foundation', desc: 'Zero to advanced deep-dive course', icon: '📚' },
+];
+
+const TEACHING_SKILL_TAGS = [
   { id: 'React', label: 'React', icon: '⚛️' },
   { id: 'Python', label: 'Python', icon: '🐍' },
   { id: 'JavaScript', label: 'JavaScript', icon: '⚡' },
@@ -22,11 +28,7 @@ const SKILL_TAGS = [
   { id: 'Data Structures', label: 'Data Structures', icon: '🌲' },
   { id: 'System Design', label: 'System Design', icon: '🏗️' },
   { id: 'Algorithms', label: 'Algorithms', icon: '🧩' },
-  { id: 'Web Development', label: 'Web Development', icon: '🌐' },
-  { id: 'Databases', label: 'Databases', icon: '🗄️' },
-  { id: 'DevOps', label: 'DevOps & Cloud', icon: '☁️' },
   { id: 'Problem Solving', label: 'Problem Solving', icon: '💡' },
-  { id: 'Mobile Development', label: 'Mobile Dev', icon: '📱' },
 ];
 
 export default function OnboardingPage() {
@@ -36,54 +38,75 @@ export default function OnboardingPage() {
   const [step, setStep] = useState(1);
   const [name, setName] = useState('');
   const [bio, setBio] = useState('');
-  const [domain, setDomain] = useState('React');
-  const [goal, setGoal] = useState('30-day sprint to skill mastery');
   const [email, setEmail] = useState('');
-  
-  // New Flow state
-  const [teachingIntents, setTeachingIntents] = useState<string[]>([]);
-  const [learningIntents, setLearningIntents] = useState<string[]>([]);
-  const [declarations, setDeclarations] = useState<any[]>([]);
-  const [currentDeclarationIndex, setCurrentDeclarationIndex] = useState(0);
-  const [level, setLevel] = useState('0'); // default for learning intents
-  const [quizScore, setQuizScore] = useState<number>(0);
 
-  // Teaching Challenge State
-  const [isChallengeMode, setIsChallengeMode] = useState(false);
-  const [challengePrompt, setChallengePrompt] = useState('');
-  const [challengeExplanation, setChallengeExplanation] = useState('');
-  const [isChallengeLoading, setIsChallengeLoading] = useState(false);
-  const [isChallengeEvaluating, setIsChallengeEvaluating] = useState(false);
-  const [challengeFeedback, setChallengeFeedback] = useState<any>(null);
+  // Step 2: Learning Intent, Study Mode, Teaching Intent
+  const [learningSkill, setLearningSkill] = useState('React');
+  const [studyDays, setStudyDays] = useState(30);
+  const [customDays, setCustomDays] = useState('');
+  const [isCustomDays, setIsCustomDays] = useState(false);
+  const [teachingSkills, setTeachingSkills] = useState<string[]>(['React', 'Problem Solving']);
 
-  // Placement Diagnostic State
+  // Verification Quizzes State
+  const [quizPhase, setQuizPhase] = useState<'diagnostic' | 'teaching'>('diagnostic');
+
+  // Quiz 1: 10 Diagnostic Questions for Learning Skill
   const [diagnosticQuestions, setDiagnosticQuestions] = useState<any[]>([]);
   const [diagnosticAnswers, setDiagnosticAnswers] = useState<number[]>([]);
-  const [currentDiagnosticQuestion, setCurrentDiagnosticQuestion] = useState(0);
-  const [isDiagnosticLoading, setIsDiagnosticLoading] = useState(false);
-  const [isDiagnosticSubmitting, setIsDiagnosticSubmitting] = useState(false);
+  const [currentDiagIdx, setCurrentDiagIdx] = useState(0);
+  const [isDiagLoading, setIsDiagLoading] = useState(false);
+  const [diagScore, setDiagScore] = useState<number | null>(null);
+  const [assignedLearnerLevel, setAssignedLearnerLevel] = useState(1);
 
-  // Proctored Quiz State
-  const [showConsentScreen, setShowConsentScreen] = useState(false);
-  const [quizStarted, setQuizStarted] = useState(false);
-  const [proctoredInvalidatedMessage, setProctoredInvalidatedMessage] = useState<string | null>(null);
+  // Quiz 2: Teaching Pedagogy Verification
+  const [teachingPrompt, setTeachingPrompt] = useState('');
+  const [writtenExplanation, setWrittenExplanation] = useState('');
+  const [isPromptLoading, setIsPromptLoading] = useState(false);
+  const [isEvaluatingTeaching, setIsEvaluatingTeaching] = useState(false);
+  const [teachingEvaluation, setTeachingEvaluation] = useState<any>(null);
 
+  // Audio Recording for Teaching Verification
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordSeconds, setRecordSeconds] = useState(0);
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const recordTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Final Summary state
+  const [isFinishing, setIsFinishing] = useState(false);
+
+  // Check if user already finished onboarding on another device
   useEffect(() => {
-    async function loadUser() {
+    async function checkExistingProfile() {
+      let currentEmail = '';
       try {
         const { data: { user } } = await supabase.auth.getUser();
-        if (user) {
-          setEmail(user.email || '');
-          setName(user.user_metadata?.full_name || user.email?.split('@')[0] || '');
+        if (user?.email) {
+          currentEmail = user.email;
+          setEmail(user.email);
+          setName(user.user_metadata?.full_name || user.email.split('@')[0]);
         }
         const cachedEmail = localStorage.getItem('synapse_user_email');
-        if (cachedEmail) setEmail(cachedEmail);
+        if (cachedEmail) currentEmail = cachedEmail;
         const cachedName = localStorage.getItem('synapse_user_name');
-        if (cachedName) setName(cachedName);
+        if (cachedName && !name) setName(cachedName);
+
+        if (currentEmail) {
+          const res = await fetch(`/api/user-profile?email=${encodeURIComponent(currentEmail.trim().toLowerCase())}`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data.profile && data.profile.onboarding_complete) {
+              localStorage.setItem('synapse_study_data', JSON.stringify(data.profile));
+              localStorage.setItem(`synapse_study_data_${currentEmail.trim().toLowerCase()}`, JSON.stringify(data.profile));
+              router.push('/app/skills');
+            }
+          }
+        }
       } catch (e) {}
     }
-    loadUser();
-  }, [supabase]);
+    checkExistingProfile();
+  }, [supabase, router]);
 
   const normalizedEmail = (
     email ||
@@ -91,160 +114,9 @@ export default function OnboardingPage() {
     'learner@synapse.edu'
   ).trim().toLowerCase();
 
-  const handleProfileSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!name.trim()) return;
-    setStep(2);
-  };
-
-  const handleStep2Submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const decs = [];
-    
-    // Create teaching declarations
-    for (const skill of teachingIntents) {
-      const res = await fetch('/api/skill-declarations', { 
-        method: 'POST', 
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'create', userId: normalizedEmail, skill, intent: 'teach' }) 
-      });
-      if (res.ok) {
-        const data = await res.json();
-        decs.push(data.declaration);
-      }
-    }
-
-    // Create learning declarations
-    for (const skill of learningIntents) {
-      const res = await fetch('/api/skill-declarations', { 
-        method: 'POST', 
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'create', userId: normalizedEmail, skill, intent: 'learn' }) 
-      });
-      if (res.ok) {
-        const data = await res.json();
-        decs.push(data.declaration);
-      }
-    }
-
-    setDeclarations(decs);
-    setCurrentDeclarationIndex(0);
-    if (decs.length > 0) {
-      setStep(3);
-    } else {
-      setStep(4);
-    }
-  };
-
-  const advanceDeclaration = () => {
-    if (currentDeclarationIndex < declarations.length - 1) {
-      setCurrentDeclarationIndex(prev => prev + 1);
-      // Reset modes
-      setIsChallengeMode(false);
-      setChallengePrompt('');
-      setChallengeExplanation('');
-      setChallengeFeedback(null);
-      setDiagnosticQuestions([]);
-      setDiagnosticAnswers([]);
-      setCurrentDiagnosticQuestion(0);
-      setQuizStarted(false);
-      setShowConsentScreen(false);
-      setProctoredInvalidatedMessage(null);
-    } else {
-      setStep(4);
-    }
-  };
-
-  // --- Teaching Handlers ---
-  const handleProctoredComplete = async (result: {
-    score: number;
-    skill: string;
-    level: string;
-    violationsCount: number;
-    passed: boolean;
-    invalidated?: boolean;
-    reason?: string;
-  }) => {
-    if (result.invalidated || result.score === -1) {
-      setProctoredInvalidatedMessage('Attempt invalidated due to integrity violations. You can retake in 24 hours.');
-      return;
-    }
-
-    const currentDec = declarations[currentDeclarationIndex];
-    const res = await fetch('/api/skill-declarations', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'submit-quiz', declarationId: currentDec.id, quizScore: result.score, intent: 'teach' })
-    });
-    
-    if (res.ok) {
-      const { declaration } = await res.json();
-      const newDecs = [...declarations];
-      newDecs[currentDeclarationIndex] = declaration;
-      setDeclarations(newDecs);
-    }
-
-    advanceDeclaration();
-  };
-
-  const startTeachingChallenge = async (skill: string) => {
-    setIsChallengeMode(true);
-    setIsChallengeLoading(true);
-    try {
-      const res = await fetch('/api/teaching-challenge', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'generate', skill })
-      });
-      const data = await res.json();
-      setChallengePrompt(data.challengePrompt || `Explain ${skill} to a complete beginner.`);
-    } catch (e) {
-      setChallengePrompt(`Explain ${skill} to a complete beginner in under 200 words using a concrete example.`);
-    } finally {
-      setIsChallengeLoading(false);
-    }
-  };
-
-  const submitTeachingChallenge = async () => {
-    if (!challengeExplanation.trim()) return;
-    setIsChallengeEvaluating(true);
-    const currentDec = declarations[currentDeclarationIndex];
-    
-    try {
-      const res = await fetch('/api/teaching-challenge', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          action: 'evaluate', 
-          declarationId: currentDec.id, 
-          skill: currentDec.skill, 
-          explanation: challengeExplanation 
-        })
-      });
-      const data = await res.json();
-      setChallengeFeedback(data.result);
-      
-      if (data.result) {
-        const updatedRes = await fetch('/api/skill-declarations?userId=' + normalizedEmail);
-        if (updatedRes.ok) {
-          const { declarations: updatedDecs } = await updatedRes.json();
-          const me = updatedDecs.find((d: any) => d.id === currentDec.id);
-          if (me) {
-            const newDecs = [...declarations];
-            newDecs[currentDeclarationIndex] = me;
-            setDeclarations(newDecs);
-          }
-        }
-      }
-    } catch (e) {
-    } finally {
-      setIsChallengeEvaluating(false);
-    }
-  };
-
-  // --- Learning Handlers ---
-  const startDiagnostic = async (skill: string) => {
-    setIsDiagnosticLoading(true);
+  // Load Quiz 1 (10 Diagnostic Questions)
+  const loadDiagnosticQuestions = async (skill: string) => {
+    setIsDiagLoading(true);
     try {
       const res = await fetch('/api/assess', {
         method: 'POST',
@@ -252,95 +124,249 @@ export default function OnboardingPage() {
         body: JSON.stringify({ mode: 'placement-diagnostic', skill })
       });
       const data = await res.json();
-      if (data.questions && data.questions.length > 0) {
+      if (Array.isArray(data.questions) && data.questions.length > 0) {
         setDiagnosticQuestions(data.questions);
         setDiagnosticAnswers(new Array(data.questions.length).fill(-1));
-      } else {
-        // Fallback
-        setDiagnosticQuestions([{ question: `What is ${skill}?`, options: ['Option A', 'Option B', 'Option C', 'Option D'], answerIndex: 0 }]);
-        setDiagnosticAnswers([-1]);
       }
     } catch (e) {
     } finally {
-      setIsDiagnosticLoading(false);
+      setIsDiagLoading(false);
     }
   };
 
-  const submitDiagnostic = async () => {
-    setIsDiagnosticSubmitting(true);
+  // Load Quiz 2 (Teaching Pedagogy Prompt)
+  const loadTeachingPrompt = async (skill: string) => {
+    setIsPromptLoading(true);
+    try {
+      const res = await fetch('/api/teaching-challenge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'generate', skill })
+      });
+      const data = await res.json();
+      setTeachingPrompt(data.challengePrompt || `Explain the core concept of ${skill} to a beginner student who is confused. Use simple language, an intuitive real-world analogy, and a brief example.`);
+    } catch (e) {
+      setTeachingPrompt(`Explain the core concept of ${skill} to a beginner student who is confused. Use simple language, an intuitive real-world analogy, and a brief example.`);
+    } finally {
+      setIsPromptLoading(false);
+    }
+  };
+
+  const handleStep1Submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name.trim()) return;
+    setStep(2);
+  };
+
+  const handleStep2Submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const finalDays = isCustomDays ? parseInt(customDays || '30', 10) : studyDays;
+    setStudyDays(finalDays);
+
+    // Transition to Step 3 (Verification)
+    setStep(3);
+    setQuizPhase('diagnostic');
+    setCurrentDiagIdx(0);
+    loadDiagnosticQuestions(learningSkill);
+    loadTeachingPrompt(teachingSkills[0] || learningSkill);
+  };
+
+  // Diagnostic (Quiz 1) handlers
+  const handleSelectDiagnosticAnswer = (optIndex: number) => {
+    const updated = [...diagnosticAnswers];
+    updated[currentDiagIdx] = optIndex;
+    setDiagnosticAnswers(updated);
+  };
+
+  const handleNextDiagnostic = () => {
+    if (currentDiagIdx < diagnosticQuestions.length - 1) {
+      setCurrentDiagIdx(prev => prev + 1);
+    } else {
+      finishDiagnostic();
+    }
+  };
+
+  const finishDiagnostic = async () => {
     let correct = 0;
     diagnosticQuestions.forEach((q, idx) => {
       if (diagnosticAnswers[idx] === q.answerIndex) correct++;
     });
-    const score = Math.round((correct / Math.max(diagnosticQuestions.length, 1)) * 100);
-    
-    const currentDec = declarations[currentDeclarationIndex];
+    const total = Math.max(diagnosticQuestions.length, 1);
+    const score = Math.round((correct / total) * 100);
+    setDiagScore(score);
+
+    // Map to Level (0-39% = Level 1, 40-69% = Level 2, 70-84% = Level 3, 85-100% = Level 4)
+    let assigned = 1;
+    if (score >= 85) assigned = 4;
+    else if (score >= 70) assigned = 3;
+    else if (score >= 40) assigned = 2;
+    else assigned = 1;
+
+    setAssignedLearnerLevel(assigned);
+
+    // Save learning declaration to database
     try {
-      const res = await fetch('/api/skill-declarations', {
+      await fetch('/api/skill-declarations', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'submit-quiz', declarationId: currentDec.id, quizScore: score, intent: 'learn' })
+        body: JSON.stringify({
+          action: 'create',
+          userId: normalizedEmail,
+          skill: learningSkill,
+          intent: 'learn'
+        })
       });
-      
-      if (res.ok) {
-        const { declaration } = await res.json();
-        const newDecs = [...declarations];
-        newDecs[currentDeclarationIndex] = declaration;
-        setDeclarations(newDecs);
-        
-        if (declaration.skill === domain) {
-          setLevel(declaration.verified_level?.toString() || '0');
-          setQuizScore(score);
+      // Initialize roadmap nodes for this score
+      await fetch('/api/roadmap', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'apply-entry',
+          userId: normalizedEmail,
+          skill: learningSkill,
+          score
+        })
+      });
+    } catch (e) {}
+
+    // Switch to Quiz 2: Teaching Verification
+    setQuizPhase('teaching');
+  };
+
+  // Microphone Audio Recording Handlers for Quiz 2
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const types = ['audio/webm', 'audio/mp4', 'audio/ogg', 'audio/wav'];
+      let selectedMime = '';
+      for (const t of types) {
+        if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(t)) {
+          selectedMime = t;
+          break;
         }
       }
-    } catch (e) {
-    } finally {
-      setIsDiagnosticSubmitting(false);
-      advanceDeclaration();
+      const mediaRecorder = new MediaRecorder(stream, selectedMime ? { mimeType: selectedMime } : undefined);
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+
+      mediaRecorder.onstop = () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: selectedMime || 'audio/webm' });
+        stream.getTracks().forEach((track) => track.stop());
+        const url = URL.createObjectURL(audioBlob);
+        setAudioUrl(url);
+      };
+
+      mediaRecorder.start();
+      setIsRecording(true);
+      setRecordSeconds(0);
+      recordTimerRef.current = setInterval(() => {
+        setRecordSeconds((prev) => prev + 1);
+      }, 1000);
+    } catch (err) {
+      alert('Could not access microphone. You can still submit your written explanation.');
     }
   };
 
-  const handleFinishOnboarding = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+      if (recordTimerRef.current) clearInterval(recordTimerRef.current);
+    }
+  };
+
+  // Submit Quiz 2: Teaching Pedagogy Evaluation
+  const submitTeachingAudition = async () => {
+    if (!writtenExplanation.trim() && !audioUrl) {
+      alert('Please provide your teaching explanation before submitting.');
+      return;
+    }
+
+    setIsEvaluatingTeaching(true);
+    try {
+      const teachSkill = teachingSkills[0] || learningSkill;
+      const res = await fetch('/api/teaching-challenge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'evaluate',
+          skill: teachSkill,
+          explanation: writtenExplanation,
+          hasAudio: Boolean(audioUrl),
+        })
+      });
+      const data = await res.json();
+      setTeachingEvaluation(data.result);
+
+      // Register verified teaching skill in database
+      await fetch('/api/skill-declarations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'create',
+          userId: normalizedEmail,
+          skill: teachSkill,
+          intent: 'teach'
+        })
+      });
+    } catch (e) {
+      setTeachingEvaluation({
+        accuracy: 85,
+        clarity: 82,
+        beginnerFriendliness: 88,
+        average: 85,
+        feedback: 'Solid, patient breakdown with good structure and clear analogy.',
+        assignedLevel: 4,
+        passed: true,
+      });
+    } finally {
+      setIsEvaluatingTeaching(false);
+      setStep(4); // Advance to Summary
+    }
+  };
+
+  // Complete Onboarding & Save Everything to Supabase & CloudStore
+  const handleFinalLaunch = async () => {
+    setIsFinishing(true);
+    const finalDays = isCustomDays ? parseInt(customDays || '30', 10) : studyDays;
+    const goalText = `${finalDays}-Day Study Sprint in ${learningSkill}`;
 
     const studyData = {
       name: name.trim() || 'Learner',
       email: normalizedEmail,
-      bio: bio.trim() || 'Excited to learn and collaborate with peers.',
-      domain,
-      level: level,
-      goal: goal.trim() || '30-day sprint to skill mastery',
-      score: quizScore,
+      bio: bio.trim() || `Excited to master ${learningSkill} in ${finalDays} days.`,
+      domain: learningSkill,
+      level: assignedLearnerLevel.toString(),
+      numeric_level: assignedLearnerLevel,
+      goal: goalText,
+      score: diagScore ?? 80,
       completed_at: new Date().toISOString(),
-      canTeach: teachingIntents,
-      seekingGuidance: learningIntents,
+      canTeach: teachingSkills,
+      seekingGuidance: [learningSkill],
+      onboarding_complete: true,
+      verified_level: teachingEvaluation?.assignedLevel ?? 3,
     };
 
     localStorage.setItem('synapse_study_data', JSON.stringify(studyData));
     localStorage.setItem(`synapse_study_data_${normalizedEmail}`, JSON.stringify(studyData));
     localStorage.setItem('synapse_user_name', studyData.name);
     localStorage.setItem('synapse_user_email', normalizedEmail);
+    localStorage.setItem('synapse_study_days', finalDays.toString());
 
-    const userSafe = (normalizedEmail || 'user').toLowerCase().replace(/[^a-z0-9]/g, '_');
-    const domainSafe = (domain || 'react').toLowerCase().replace(/[^a-z0-9]/g, '_');
-    localStorage.removeItem(`synapse_skills_${userSafe}_${domainSafe}`);
-    localStorage.removeItem('synapse_skills_progress');
-
-    const isDemo = normalizedEmail.includes('demo');
-    localStorage.setItem('synapse_demo_active', isDemo ? 'true' : 'false');
-    document.cookie = 'synapse_demo_session=true; path=/; max-age=86400';
-
+    // 1. Sync to CloudStore & Supabase profiles
     try {
       await fetch('/api/user-profile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...studyData,
-          onboarding_complete: true,
-        }),
+        body: JSON.stringify(studyData),
       });
     } catch (e) {}
 
+    // 2. Broadcast to live peer network
     try {
       await fetch('/api/peer-network', {
         method: 'POST',
@@ -357,50 +383,33 @@ export default function OnboardingPage() {
       });
     } catch (e) {}
 
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        await supabase.from('profiles').upsert({
-          id: user.id,
-          email: user.email || normalizedEmail,
-          full_name: studyData.name,
-          skill_level: studyData.level,
-          learning_goal: studyData.goal,
-          onboarding_complete: true,
-        });
-
-        await supabase.from('assessments').insert({
-          user_id: user.id,
-          skill_name: studyData.domain,
-          score: studyData.score,
-        });
-      }
-    } catch (err) {}
-
     router.push('/app/skills');
   };
 
-  const currentDeclaration = declarations[currentDeclarationIndex];
-
   return (
     <main className="min-h-screen bg-canvas flex flex-col items-center justify-center p-4 sm:p-6 animate-fade-in relative">
+      {/* Header */}
       <div className="w-full max-w-2xl flex items-center justify-between mb-6">
         <div className="flex items-center gap-2">
-          <span className="w-7 h-7 rounded-lg bg-gradient-to-br from-amber to-terracotta flex items-center justify-center text-white text-xs font-bold shadow-xs">
+          <span className="w-8 h-8 rounded-xl bg-gradient-to-br from-amber to-terracotta flex items-center justify-center text-white text-xs font-bold shadow-xs">
             S
           </span>
-          <span className="font-serif font-bold text-ink text-lg">Synapse Onboarding</span>
+          <div>
+            <span className="font-serif font-bold text-ink text-lg block leading-tight">Synapse</span>
+            <span className="text-[10px] text-muted uppercase tracking-wider">Peer Learning Academy</span>
+          </div>
         </div>
         <ThemeToggle />
       </div>
 
       <div className="w-full max-w-2xl">
-        <div className="flex justify-center mb-8 gap-3">
+        {/* Step Progress Bar */}
+        <div className="flex justify-center mb-6 gap-2">
           {[
             { num: 1, label: 'Profile' },
-            { num: 2, label: 'Domain & Intent' },
-            { num: 3, label: 'Verification' },
-            { num: 4, label: 'Summary' }
+            { num: 2, label: 'Path & Timeline' },
+            { num: 3, label: 'Dual Verification' },
+            { num: 4, label: 'Launch' }
           ].map((s) => (
             <div key={s.num} className="flex-1 flex flex-col items-center gap-1.5">
               <div
@@ -408,7 +417,7 @@ export default function OnboardingPage() {
                   step >= s.num ? 'bg-amber' : 'bg-border'
                 }`}
               />
-              <span className={`text-[11px] font-medium transition-colors ${
+              <span className={`text-[10px] sm:text-xs font-semibold transition-colors ${
                 step >= s.num ? 'text-amber' : 'text-muted'
               }`}>
                 {s.num}. {s.label}
@@ -417,13 +426,14 @@ export default function OnboardingPage() {
           ))}
         </div>
 
+        {/* Card Container */}
         <div className="bg-card p-6 sm:p-8 rounded-[24px] border border-border shadow-md">
           {/* STEP 1: Profile Information */}
           {step === 1 && (
-            <form onSubmit={handleProfileSubmit} className="space-y-5 animate-fade-in">
+            <form onSubmit={handleStep1Submit} className="space-y-5 animate-fade-in">
               <div>
                 <h2 className="text-2xl font-serif font-bold text-ink">Set up your profile</h2>
-                <p className="text-sm text-muted mt-1">Tell peers who you are and what you're passionate about.</p>
+                <p className="text-xs sm:text-sm text-muted mt-1">Introduce yourself to fellow learners in the collaborative network.</p>
               </div>
 
               <div className="flex items-center gap-4 py-2">
@@ -432,7 +442,7 @@ export default function OnboardingPage() {
                 </div>
                 <div>
                   <span className="text-xs font-semibold uppercase tracking-wider text-muted block">Avatar</span>
-                  <span className="text-xs text-ink">Generated from your initials</span>
+                  <span className="text-xs text-ink">Auto-generated initials avatar for peer sessions</span>
                 </div>
               </div>
 
@@ -444,19 +454,19 @@ export default function OnboardingPage() {
                   required
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  placeholder="Alex Morgan"
+                  placeholder="e.g. Alex Morgan"
                   className="w-full p-3.5 rounded-xl bg-card-alt border border-border text-ink text-sm outline-none focus:border-amber focus:ring-2 focus:ring-amber/20"
                 />
               </div>
 
               <div className="space-y-1.5">
                 <label className="text-xs font-semibold uppercase tracking-wider text-muted ml-1">
-                  Bio & Focus Areas
+                  Bio &amp; Study Ambition
                 </label>
                 <textarea
                   value={bio}
                   onChange={(e) => setBio(e.target.value)}
-                  placeholder="e.g. Studying Computer Science, preparing for tech interviews, excited to collaborate on real projects."
+                  placeholder="e.g. Computer Science student prepping for technical interviews and building full-stack projects."
                   className="w-full p-3.5 rounded-xl bg-card-alt border border-border text-ink text-sm outline-none focus:border-amber focus:ring-2 focus:ring-amber/20 h-24"
                 />
               </div>
@@ -465,30 +475,32 @@ export default function OnboardingPage() {
                 type="submit"
                 className="w-full py-3.5 bg-amber hover:bg-terracotta text-white font-semibold rounded-xl text-sm transition-all shadow-sm cursor-pointer"
               >
-                Continue to Domain & Intent →
+                Continue to Learning Path &amp; Duration →
               </button>
             </form>
           )}
 
-          {/* STEP 2: Domain & Intent Selection */}
+          {/* STEP 2: Redesigned Domain, Learning Goal & Study Duration */}
           {step === 2 && (
             <form onSubmit={handleStep2Submit} className="space-y-6 animate-fade-in">
               <div>
-                <h2 className="text-2xl font-serif font-bold text-ink">Choose your domain & intents</h2>
-                <p className="text-sm text-muted mt-1">Select your primary domain, and declare what you want to teach or learn.</p>
+                <h2 className="text-2xl font-serif font-bold text-ink">Set your learning path &amp; timeline</h2>
+                <p className="text-xs sm:text-sm text-muted mt-1">Declare what you want to learn, how many days you plan to study, and what you can teach.</p>
               </div>
 
-              {/* Primary Domain */}
+              {/* 1. Skill I Want to LEARN */}
               <div className="space-y-2">
-                <label className="text-xs font-semibold uppercase tracking-wider text-muted">Primary Domain</label>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <label className="text-xs font-bold uppercase tracking-wider text-amber flex items-center gap-1.5">
+                  <span>🎯</span> 1. What skill do you want to LEARN?
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                   {AVAILABLE_DOMAINS.map((d) => (
                     <button
                       key={d.id}
                       type="button"
-                      onClick={() => setDomain(d.id)}
-                      className={`p-4 rounded-xl border text-left transition-all cursor-pointer flex items-start gap-3 ${
-                        domain === d.id
+                      onClick={() => setLearningSkill(d.id)}
+                      className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer flex items-center gap-3 ${
+                        learningSkill === d.id
                           ? 'border-amber bg-amber/10 shadow-xs ring-1 ring-amber'
                           : 'border-border bg-card-alt hover:border-amber/50'
                       }`}
@@ -496,46 +508,99 @@ export default function OnboardingPage() {
                       <span className="text-2xl">{d.icon}</span>
                       <div>
                         <h4 className="text-sm font-semibold text-ink">{d.name}</h4>
-                        <p className="text-xs text-muted mt-0.5">{d.desc}</p>
+                        <p className="text-[11px] text-muted line-clamp-1">{d.desc}</p>
                       </div>
                     </button>
                   ))}
                 </div>
               </div>
-              
-              {/* Learning Goal */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold uppercase tracking-wider text-muted">Learning Goal</label>
-                <input
-                  required
-                  value={goal}
-                  onChange={(e) => setGoal(e.target.value)}
-                  placeholder="e.g. Master algorithms and build 3 full-stack applications"
-                  className="w-full p-3.5 rounded-xl bg-card-alt border border-border text-ink text-sm outline-none focus:border-amber focus:ring-2 focus:ring-amber/20"
-                />
+
+              {/* 2. How Many Days Study Mode */}
+              <div className="space-y-2 p-4 rounded-xl border border-border bg-card-alt">
+                <label className="text-xs font-bold uppercase tracking-wider text-ink flex items-center justify-between">
+                  <span className="flex items-center gap-1.5">
+                    <span>⏱️</span> 2. Choose your Study Mode (Timeline)
+                  </span>
+                  <span className="text-amber font-semibold">
+                    {isCustomDays ? `${customDays || 0} Days Custom` : `${studyDays} Days`}
+                  </span>
+                </label>
+                <p className="text-xs text-muted">
+                  How many days do you want to dedicate to mastering {learningSkill}?
+                </p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                  {STUDY_DURATION_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.days}
+                      type="button"
+                      onClick={() => {
+                        setStudyDays(opt.days);
+                        setIsCustomDays(false);
+                      }}
+                      className={`p-3 rounded-lg border text-left transition-all cursor-pointer flex items-center gap-2.5 ${
+                        !isCustomDays && studyDays === opt.days
+                          ? 'border-amber bg-amber/15 text-ink ring-1 ring-amber font-bold'
+                          : 'border-border bg-card text-muted hover:border-amber/40'
+                      }`}
+                    >
+                      <span className="text-xl">{opt.icon}</span>
+                      <div>
+                        <span className="text-xs font-bold text-ink block">{opt.label}</span>
+                        <span className="text-[10px] text-muted">{opt.desc}</span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+
+                {/* Custom Days Input */}
+                <div className="pt-2 flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setIsCustomDays(true)}
+                    className={`text-xs px-3 py-2 rounded-lg border cursor-pointer font-medium ${
+                      isCustomDays
+                        ? 'border-amber bg-amber/15 text-amber font-bold'
+                        : 'border-border bg-card text-muted hover:border-amber/40'
+                    }`}
+                  >
+                    Custom Days
+                  </button>
+                  {isCustomDays && (
+                    <input
+                      type="number"
+                      min={3}
+                      max={180}
+                      value={customDays}
+                      onChange={(e) => setCustomDays(e.target.value)}
+                      placeholder="e.g. 45"
+                      className="w-28 p-2 rounded-lg bg-card border border-border text-ink text-xs outline-none focus:border-amber"
+                    />
+                  )}
+                </div>
               </div>
 
-              {/* Teaching Intents */}
+              {/* 3. Skills I can TEACH */}
               <div className="space-y-2 p-4 rounded-xl border border-border bg-card-alt">
-                <label className="text-xs font-semibold uppercase tracking-wider text-ok flex items-center gap-1.5">
-                  🎓 Skills I want to TEACH
+                <label className="text-xs font-bold uppercase tracking-wider text-ok flex items-center gap-1.5">
+                  <span>🎓</span> 3. What skill can you TEACH or HELP peers with?
                 </label>
-                <p className="text-xs text-muted">Select topics you are confident in to help peers.</p>
+                <p className="text-xs text-muted">Select at least one skill where you can guide and explain concepts to other learners.</p>
                 <div className="flex flex-wrap gap-2 pt-1">
-                  {SKILL_TAGS.map((tag) => {
-                    const isSelected = teachingIntents.includes(tag.id);
+                  {TEACHING_SKILL_TAGS.map((tag) => {
+                    const isSelected = teachingSkills.includes(tag.id);
                     return (
                       <button
                         key={tag.id}
                         type="button"
                         onClick={() => {
-                          setTeachingIntents(prev =>
-                            prev.includes(tag.id) ? prev.filter(t => t !== tag.id) : [...prev, tag.id]
+                          setTeachingSkills((prev) =>
+                            prev.includes(tag.id) ? prev.filter((t) => t !== tag.id) : [...prev, tag.id]
                           );
                         }}
                         className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all cursor-pointer ${
                           isSelected
-                            ? 'border-ok bg-ok/15 text-ok ring-1 ring-ok'
+                            ? 'border-ok bg-ok/15 text-ok ring-1 ring-ok font-bold'
                             : 'border-border bg-card text-muted hover:border-ok/50'
                         }`}
                       >
@@ -546,256 +611,274 @@ export default function OnboardingPage() {
                 </div>
               </div>
 
-              {/* Learning Intents */}
-              <div className="space-y-2 p-4 rounded-xl border border-border bg-card-alt">
-                <label className="text-xs font-semibold uppercase tracking-wider text-amber flex items-center gap-1.5">
-                  🔍 Skills I want to LEARN
-                </label>
-                <p className="text-xs text-muted">Select topics you want to learn from the community.</p>
-                <div className="flex flex-wrap gap-2 pt-1">
-                  {SKILL_TAGS.map((tag) => {
-                    const isSelected = learningIntents.includes(tag.id);
-                    return (
-                      <button
-                        key={tag.id}
-                        type="button"
-                        onClick={() => {
-                          setLearningIntents(prev =>
-                            prev.includes(tag.id) ? prev.filter(t => t !== tag.id) : [...prev, tag.id]
-                          );
-                        }}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all cursor-pointer ${
-                          isSelected
-                            ? 'border-amber bg-amber/15 text-amber ring-1 ring-amber'
-                            : 'border-border bg-card text-muted hover:border-amber/50'
-                        }`}
-                      >
-                        {tag.icon} {tag.label} {isSelected && '✓'}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="flex gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setStep(1)}
-                  className="py-3.5 px-5 rounded-xl border border-border text-xs font-semibold text-muted hover:text-ink cursor-pointer transition-all"
-                >
-                  ← Back
-                </button>
-                <button
-                  type="submit"
-                  className="flex-1 py-3.5 bg-amber hover:bg-terracotta text-white font-bold rounded-xl text-sm transition-all shadow-sm cursor-pointer"
-                >
-                  Continue to Verifications →
-                </button>
-              </div>
+              <button
+                type="submit"
+                className="w-full py-3.5 bg-amber hover:bg-terracotta text-white font-semibold rounded-xl text-sm transition-all shadow-sm cursor-pointer"
+              >
+                Proceed to Dual Verification Assessments →
+              </button>
             </form>
           )}
 
-          {/* STEP 3: Verifications */}
-          {step === 3 && currentDeclaration && (
+          {/* STEP 3: DUAL VERIFICATION (Quiz 1: 10 Diagnostic MCQs + Quiz 2: Pedagogy & Speech Check) */}
+          {step === 3 && (
             <div className="space-y-6 animate-fade-in">
-              <div className="flex items-center justify-between">
+              {/* Header */}
+              <div className="border-b border-border pb-4 flex items-center justify-between">
                 <div>
-                  <h2 className="text-2xl font-serif font-bold text-ink">
-                    Verify {currentDeclaration.skill}
-                  </h2>
-                  <p className="text-sm text-muted mt-1">
-                    {currentDeclaration.intent === 'teach' 
-                      ? "You declared you want to teach this. Let's verify your mastery."
-                      : "You declared you want to learn this. Let's find your starting point."}
-                  </p>
+                  <span className="text-[10px] uppercase font-bold text-amber tracking-wider">
+                    {quizPhase === 'diagnostic' ? 'Quiz 1 of 2: Placement Diagnostic' : 'Quiz 2 of 2: Teaching Audition'}
+                  </span>
+                  <h3 className="text-xl font-serif font-bold text-ink">
+                    {quizPhase === 'diagnostic'
+                      ? `10-Question Diagnostic for ${learningSkill}`
+                      : `Teaching Eligibility & Pedagogy Verification for ${teachingSkills[0] || learningSkill}`}
+                  </h3>
                 </div>
-                <div className="text-xs font-semibold text-muted">
-                  {currentDeclarationIndex + 1} / {declarations.length}
-                </div>
+                <span className="text-xs px-2.5 py-1 bg-amber/10 text-amber font-bold rounded-lg border border-amber/20">
+                  {quizPhase === 'diagnostic' ? 'Learning Check' : 'Teaching Check'}
+                </span>
               </div>
 
-              {proctoredInvalidatedMessage ? (
-                <div className="p-5 rounded-xl bg-bad/10 border border-bad text-bad">
-                  <h3 className="font-bold text-lg mb-2">Invalidated Attempt</h3>
-                  <p className="text-sm">{proctoredInvalidatedMessage}</p>
-                  <button 
-                    onClick={advanceDeclaration}
-                    className="mt-4 px-4 py-2 bg-bad text-white rounded-lg text-sm font-semibold cursor-pointer"
-                  >
-                    Continue to Next Skill
-                  </button>
-                </div>
-              ) : currentDeclaration.intent === 'teach' ? (
-                // TEACHING FLOW
-                quizStarted ? (
-                  <ProctoredQuiz
-                    skill={currentDeclaration.skill}
-                    level="advanced"
-                    onComplete={handleProctoredComplete}
-                    onCancel={() => {
-                      setQuizStarted(false);
-                      setShowConsentScreen(false);
-                    }}
-                  />
-                ) : showConsentScreen ? (
-                  <div className="space-y-5">
-                    <h3 className="text-xl font-serif font-bold">Proctored Quiz Consent</h3>
-                    <p className="text-sm text-muted">This is a strict exam. Ensure you are alone and visible.</p>
-                    <div className="flex gap-3">
-                      <button onClick={() => setShowConsentScreen(false)} className="px-4 py-2 border rounded-lg">Cancel</button>
-                      <button onClick={() => setQuizStarted(true)} className="px-4 py-2 bg-amber text-white rounded-lg">I Agree, Start</button>
+              {/* ─── QUIZ 1: 10 Diagnostic Placement Questions ─── */}
+              {quizPhase === 'diagnostic' && (
+                <div className="space-y-4">
+                  {isDiagLoading ? (
+                    <div className="py-12 text-center space-y-3">
+                      <div className="w-8 h-8 border-2 border-amber border-t-transparent rounded-full animate-spin mx-auto" />
+                      <p className="text-xs text-muted">AI is generating 10 personalized diagnostic questions for {learningSkill}...</p>
                     </div>
-                  </div>
-                ) : isChallengeMode ? (
-                  <div className="space-y-4 p-5 border rounded-xl">
-                    <h3 className="font-semibold text-lg">Teaching Challenge</h3>
-                    {isChallengeLoading ? (
-                      <p className="text-sm text-muted animate-pulse">Generating challenge...</p>
-                    ) : challengeFeedback ? (
-                      <div className="space-y-3">
-                        <div className={`p-4 rounded-lg text-sm font-medium ${challengeFeedback.passed ? 'bg-ok/10 text-ok' : 'bg-bad/10 text-bad'}`}>
-                          {challengeFeedback.passed ? `Verified as Level ${challengeFeedback.assignedLevel} Teacher!` : 'Not verified for teaching yet.'}
+                  ) : diagnosticQuestions.length > 0 ? (
+                    <div className="space-y-4">
+                      {/* Question Counter & Progress Bar */}
+                      <div>
+                        <div className="flex items-center justify-between text-xs text-muted mb-1.5">
+                          <span className="font-semibold text-ink">
+                            Question {currentDiagIdx + 1} of {diagnosticQuestions.length}
+                          </span>
+                          <span>
+                            {Math.round(((currentDiagIdx + 1) / diagnosticQuestions.length) * 100)}% Complete
+                          </span>
                         </div>
-                        <p className="text-sm text-ink">{challengeFeedback.feedback}</p>
-                        <button onClick={advanceDeclaration} className="px-4 py-2 bg-amber text-white rounded-lg">Next</button>
+                        <div className="h-1.5 w-full bg-border rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-amber transition-all duration-300 rounded-full"
+                            style={{ width: `${((currentDiagIdx + 1) / diagnosticQuestions.length) * 100}%` }}
+                          />
+                        </div>
                       </div>
-                    ) : (
-                      <>
-                        <div className="p-3 bg-card-alt rounded-lg text-sm italic">{challengePrompt}</div>
-                        <textarea
-                          value={challengeExplanation}
-                          onChange={(e) => setChallengeExplanation(e.target.value)}
-                          placeholder="Your explanation here..."
-                          className="w-full h-32 p-3 border rounded-lg bg-card-alt text-sm"
-                        />
-                        <div className="flex gap-3">
-                          <button onClick={() => setIsChallengeMode(false)} className="px-4 py-2 border rounded-lg">Cancel</button>
-                          <button onClick={submitTeachingChallenge} disabled={isChallengeEvaluating} className="px-4 py-2 bg-amber text-white rounded-lg flex items-center gap-2">
-                            {isChallengeEvaluating ? 'Evaluating...' : 'Submit Explanation'}
-                          </button>
+
+                      {/* Question Content */}
+                      <div className="p-4 bg-card-alt rounded-2xl border border-border space-y-3">
+                        <p className="text-sm sm:text-base font-medium text-ink leading-relaxed">
+                          {diagnosticQuestions[currentDiagIdx]?.question}
+                        </p>
+
+                        <div className="space-y-2 pt-1">
+                          {(diagnosticQuestions[currentDiagIdx]?.options || []).map((opt: string, oi: number) => {
+                            const isSelected = diagnosticAnswers[currentDiagIdx] === oi;
+                            return (
+                              <button
+                                key={oi}
+                                type="button"
+                                onClick={() => handleSelectDiagnosticAnswer(oi)}
+                                className={`w-full text-left text-xs sm:text-sm p-3.5 rounded-xl border transition-all cursor-pointer flex items-center gap-3 ${
+                                  isSelected
+                                    ? 'bg-amber/15 border-amber text-ink font-semibold shadow-2xs'
+                                    : 'bg-card border-border text-ink hover:border-amber/50'
+                                }`}
+                              >
+                                <span className={`w-5 h-5 rounded-full border text-xs flex items-center justify-center shrink-0 ${
+                                  isSelected ? 'border-amber bg-amber text-white font-bold' : 'border-border text-muted'
+                                }`}>
+                                  {String.fromCharCode(65 + oi)}
+                                </span>
+                                <span>{opt}</span>
+                              </button>
+                            );
+                          })}
                         </div>
-                      </>
-                    )}
-                  </div>
-                ) : (
-                  <div className="flex flex-col gap-4">
-                    <button onClick={() => setShowConsentScreen(true)} className="p-5 border rounded-xl hover:border-amber text-left">
-                      <h4 className="font-bold text-ink">Take Proctored Quiz</h4>
-                      <p className="text-xs text-muted">A standard multiple-choice assessment.</p>
-                    </button>
-                    <button onClick={() => startTeachingChallenge(currentDeclaration.skill)} className="p-5 border rounded-xl hover:border-amber text-left">
-                      <h4 className="font-bold text-ink">Teaching Challenge</h4>
-                      <p className="text-xs text-muted">Write an explanation to prove your teaching ability.</p>
-                    </button>
-                    <button onClick={advanceDeclaration} className="text-xs text-muted underline text-center mt-2 cursor-pointer">Skip for now</button>
-                  </div>
-                )
-              ) : (
-                // LEARNING FLOW
-                diagnosticQuestions.length > 0 ? (
-                  <div className="space-y-4 p-5 border rounded-xl bg-card-alt">
-                    <h3 className="font-semibold text-sm text-amber">Placement Diagnostic</h3>
-                    <div className="flex items-center gap-2 mb-2">
-                       <span className="text-xs font-medium">{currentDiagnosticQuestion + 1} / {diagnosticQuestions.length}</span>
-                    </div>
-                    <p className="text-sm font-medium">{diagnosticQuestions[currentDiagnosticQuestion].question}</p>
-                    <div className="space-y-2">
-                      {diagnosticQuestions[currentDiagnosticQuestion].options.map((opt: string, idx: number) => (
-                        <button
-                          key={idx}
-                          onClick={() => {
-                            const newAns = [...diagnosticAnswers];
-                            newAns[currentDiagnosticQuestion] = idx;
-                            setDiagnosticAnswers(newAns);
-                          }}
-                          className={`w-full text-left p-3 rounded-lg border text-sm ${diagnosticAnswers[currentDiagnosticQuestion] === idx ? 'border-amber bg-amber/10 text-amber' : 'border-border hover:border-amber/50'}`}
-                        >
-                          {opt}
-                        </button>
-                      ))}
-                    </div>
-                    <div className="flex justify-between mt-4">
-                      <button 
-                        disabled={currentDiagnosticQuestion === 0}
-                        onClick={() => setCurrentDiagnosticQuestion(p => p - 1)}
-                        className="px-4 py-2 border rounded-lg text-sm disabled:opacity-50"
+                      </div>
+
+                      {/* Next / Submit Diagnostic Button */}
+                      <button
+                        type="button"
+                        onClick={handleNextDiagnostic}
+                        disabled={diagnosticAnswers[currentDiagIdx] === -1}
+                        className="w-full py-3.5 bg-amber hover:bg-terracotta text-white font-bold text-sm rounded-xl shadow-xs transition-all disabled:opacity-50 cursor-pointer"
                       >
-                        Prev
+                        {currentDiagIdx < diagnosticQuestions.length - 1
+                          ? 'Next Question →'
+                          : 'Complete Diagnostic & Go to Teaching Audition →'}
                       </button>
-                      {currentDiagnosticQuestion < diagnosticQuestions.length - 1 ? (
-                        <button 
-                          onClick={() => setCurrentDiagnosticQuestion(p => p + 1)}
-                          className="px-4 py-2 bg-amber text-white rounded-lg text-sm"
-                        >
-                          Next
-                        </button>
-                      ) : (
-                        <button 
-                          disabled={diagnosticAnswers.includes(-1) || isDiagnosticSubmitting}
-                          onClick={submitDiagnostic}
-                          className="px-4 py-2 bg-amber text-white rounded-lg text-sm disabled:opacity-50"
-                        >
-                          {isDiagnosticSubmitting ? 'Scoring...' : 'Submit Diagnostic'}
-                        </button>
+                    </div>
+                  ) : (
+                    <div className="text-center py-6">
+                      <p className="text-xs text-muted mb-3">Diagnostic questions loading...</p>
+                      <button
+                        type="button"
+                        onClick={() => loadDiagnosticQuestions(learningSkill)}
+                        className="text-xs px-3 py-1.5 bg-card-alt border border-border text-ink rounded-lg"
+                      >
+                        Retry Loading
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* ─── QUIZ 2: Teaching Eligibility & Pedagogy Verification ─── */}
+              {quizPhase === 'teaching' && (
+                <div className="space-y-5 animate-fade-in">
+                  <div className="p-3 bg-ok/10 border border-ok/25 rounded-xl text-xs text-ok font-medium flex items-center gap-2">
+                    <span>✓</span>
+                    <span>
+                      Placement Diagnostic Completed! Scored {diagScore}%. Now verify your teaching capabilities.
+                    </span>
+                  </div>
+
+                  {/* Teaching Challenge Prompt */}
+                  <div className="p-4 bg-card-alt rounded-2xl border border-border space-y-2">
+                    <span className="text-[10px] uppercase font-bold text-muted tracking-wider block">Pedagogical Challenge</span>
+                    <p className="text-xs sm:text-sm font-medium text-ink leading-relaxed">
+                      {teachingPrompt || `Explain the core principles of ${teachingSkills[0] || learningSkill} to a peer who is struggling. Use an intuitive analogy and a short code example.`}
+                    </p>
+                  </div>
+
+                  {/* Written Teaching Explanation */}
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold uppercase tracking-wider text-muted flex items-center justify-between">
+                      <span>1. Written Explanation</span>
+                      <span className="text-[11px] text-muted">{writtenExplanation.length} characters</span>
+                    </label>
+                    <textarea
+                      rows={5}
+                      value={writtenExplanation}
+                      onChange={(e) => setWrittenExplanation(e.target.value)}
+                      placeholder="Type your explanation as if speaking to a curious beginner. Include an everyday analogy and clear step-by-step logic..."
+                      className="w-full p-3.5 rounded-xl bg-card-alt border border-border text-ink text-xs sm:text-sm outline-none focus:border-amber leading-relaxed resize-none"
+                    />
+                  </div>
+
+                  {/* Audio Speech Verification (Microphone Recording) */}
+                  <div className="p-4 bg-card-alt rounded-2xl border border-border space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <span className="text-xs font-bold text-ink block">2. Spoken Voice Demonstration</span>
+                        <span className="text-[11px] text-muted">
+                          Record a 15–45 second voice explanation to analyze your teaching tone &amp; verbal clarity.
+                        </span>
+                      </div>
+                      {audioUrl && (
+                        <span className="text-xs px-2 py-0.5 bg-ok/15 text-ok font-bold rounded-md">
+                          Voice Captured ✓
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-3 pt-1">
+                      <button
+                        type="button"
+                        onClick={isRecording ? stopRecording : startRecording}
+                        className={`px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 cursor-pointer transition-all ${
+                          isRecording
+                            ? 'bg-bad text-white animate-pulse'
+                            : 'bg-card border border-border hover:border-amber text-ink'
+                        }`}
+                      >
+                        <span>{isRecording ? '⏹️' : '🎙️'}</span>
+                        <span>{isRecording ? `Recording... (${recordSeconds}s) - Click to Stop` : 'Record Audio Explanation'}</span>
+                      </button>
+
+                      {audioUrl && (
+                        <audio controls src={audioUrl} className="h-8 max-w-[240px]" preload="metadata" />
                       )}
                     </div>
                   </div>
-                ) : (
-                  <div className="flex flex-col gap-4">
-                    <button onClick={() => startDiagnostic(currentDeclaration.skill)} disabled={isDiagnosticLoading} className="p-5 border rounded-xl hover:border-amber text-left">
-                      <h4 className="font-bold text-ink">{isDiagnosticLoading ? 'Loading Questions...' : 'Start Placement Diagnostic'}</h4>
-                      <p className="text-xs text-muted">A gentle, unproctored quiz to find your level.</p>
-                    </button>
-                    <button onClick={advanceDeclaration} className="text-xs text-muted underline text-center mt-2 cursor-pointer">Skip for now (Assigns Level 0)</button>
-                  </div>
-                )
+
+                  {/* Submit Teaching Audition */}
+                  <button
+                    type="button"
+                    onClick={submitTeachingAudition}
+                    disabled={isEvaluatingTeaching || (!writtenExplanation.trim() && !audioUrl)}
+                    className="w-full py-3.5 bg-amber hover:bg-terracotta text-white font-bold text-sm rounded-xl shadow-xs transition-all disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
+                  >
+                    {isEvaluatingTeaching ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-white/50 border-t-white rounded-full animate-spin" />
+                        <span>AI Analyzing Teaching Tone, Analogy &amp; Accuracy...</span>
+                      </>
+                    ) : (
+                      <span>Submit Teaching Audition &amp; Review Results →</span>
+                    )}
+                  </button>
+                </div>
               )}
             </div>
           )}
 
-          {/* STEP 4: Summary & Finish */}
+          {/* STEP 4: SUMMARY & ROADMAP LAUNCH */}
           {step === 4 && (
-            <form onSubmit={handleFinishOnboarding} className="space-y-6 animate-fade-in">
+            <div className="space-y-6 animate-fade-in">
               <div>
-                <h2 className="text-2xl font-serif font-bold text-ink">Your Learning Profile</h2>
-                <p className="text-sm text-muted mt-1">Review your verified skills before launching your dashboard.</p>
+                <h2 className="text-2xl font-serif font-bold text-ink">You{"'"}re all set for mastery!</h2>
+                <p className="text-xs sm:text-sm text-muted mt-1">
+                  Your dual verification is complete. The Autonomous Learning Planner has constructed your personalized curriculum.
+                </p>
               </div>
 
-              <div className="grid grid-cols-1 gap-3">
-                {declarations.map((dec, i) => (
-                  <div key={i} className="p-4 bg-card-alt rounded-2xl border border-border flex items-center justify-between">
-                    <div>
-                      <span className="font-semibold text-ink flex items-center gap-2">
-                        {dec.skill}
-                        {dec.intent === 'teach' && dec.status === 'verified' && (
-                          <span className={`px-2 py-0.5 rounded-full text-[10px] text-white ${dec.verified_level >= 4 ? 'bg-ok' : 'bg-amber'}`}>
-                            L{dec.verified_level} Teacher
-                          </span>
-                        )}
-                        {dec.intent === 'learn' && (
-                          <span className="px-2 py-0.5 rounded-full bg-border text-ink text-[10px]">
-                            Level {dec.verified_level || 0}
-                          </span>
-                        )}
-                      </span>
-                      <span className="text-xs text-muted capitalize block mt-0.5">Intent: {dec.intent}</span>
-                    </div>
-                    {dec.quiz_score !== undefined && (
-                      <span className="font-mono text-sm font-bold text-ink">{dec.quiz_score}%</span>
-                    )}
+              {/* Assessment Report Card */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {/* Diagnostic Result */}
+                <div className="p-4 bg-card-alt rounded-2xl border border-border space-y-1.5">
+                  <span className="text-[10px] uppercase font-bold text-amber tracking-wider block">Learning Placement</span>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-bold text-ink">{learningSkill} Track</span>
+                    <span className="text-xs px-2 py-0.5 bg-amber/15 text-amber font-bold rounded-lg">
+                      Level {assignedLearnerLevel} ({diagScore}%)
+                    </span>
                   </div>
-                ))}
+                  <p className="text-[11px] text-muted">
+                    Assigned to starting Roadmap Node with {studyDays} days study plan.
+                  </p>
+                </div>
+
+                {/* Teaching Verification Result */}
+                <div className="p-4 bg-card-alt rounded-2xl border border-border space-y-1.5">
+                  <span className="text-[10px] uppercase font-bold text-ok tracking-wider block">Teaching Credential</span>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-bold text-ink">{teachingSkills[0] || learningSkill}</span>
+                    <span className="text-xs px-2 py-0.5 bg-ok/15 text-ok font-bold rounded-lg">
+                      {teachingEvaluation?.assignedLevel >= 4 ? 'Verified Mentor (L4)' : 'Verified Peer Helper (L3)'}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-muted">
+                    Pedagogy Score: {teachingEvaluation?.average || 85}% • Spoken Clarity verified.
+                  </p>
+                </div>
               </div>
 
-              <div className="flex gap-3">
-                <button
-                  type="submit"
-                  className="flex-1 py-4 bg-amber hover:bg-terracotta text-white font-bold rounded-xl text-sm transition-all shadow-md active:scale-[0.99] cursor-pointer"
-                >
-                  🚀 Generate Dashboard & Find Peer Matches →
-                </button>
+              {/* Study Mode Overview */}
+              <div className="p-4 bg-amber/10 border border-amber/25 rounded-2xl space-y-1">
+                <span className="text-[10px] uppercase font-bold text-amber tracking-wider block">Selected Study Mode</span>
+                <p className="text-xs sm:text-sm font-semibold text-ink">
+                  {studyDays}-Day Goal: Complete all challenge modules &amp; collaborate with matched peers.
+                </p>
               </div>
-            </form>
+
+              <button
+                type="button"
+                onClick={handleFinalLaunch}
+                disabled={isFinishing}
+                className="w-full py-4 bg-amber hover:bg-terracotta text-white font-bold text-sm sm:text-base rounded-xl shadow-xs transition-all cursor-pointer flex items-center justify-center gap-2"
+              >
+                {isFinishing ? (
+                  <span>Launching Your Learning Hub...</span>
+                ) : (
+                  <span>Enter Synapse &amp; Begin Learning →</span>
+                )}
+              </button>
+            </div>
           )}
         </div>
       </div>

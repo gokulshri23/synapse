@@ -136,7 +136,31 @@ export async function POST(req: Request) {
       }
 
       // Check user's cloud study profile for multi-device sync
-      const profile = getCloudProfile(normalizedEmail);
+      let profile = getCloudProfile(normalizedEmail);
+
+      // If not cached or incomplete in cloud cache, check Supabase directly
+      if (!profile || !profile.onboarding_complete) {
+        try {
+          const { data: dbProfile, error: dbErr } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('email', normalizedEmail)
+            .maybeSingle();
+
+          if (dbProfile && !dbErr && dbProfile.onboarding_complete) {
+            profile = saveCloudProfile({
+              name: dbProfile.full_name || authenticatedUser.fullName,
+              email: normalizedEmail,
+              domain: dbProfile.skill_level || 'React',
+              level: dbProfile.skill_level || 'intermediate',
+              goal: dbProfile.learning_goal || '30-day sprint to skill mastery',
+              score: 85,
+              onboarding_complete: true,
+            });
+          }
+        } catch (e) {}
+      }
+
       const needsOnboarding = !profile || !profile.onboarding_complete;
 
       const res = NextResponse.json({

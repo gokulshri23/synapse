@@ -239,22 +239,8 @@ export default function MatchPage() {
       }
     } catch (e) {}
 
-    // Add mock peers pool if in demo mode or if no real peers discovered yet
-    const demoActive = localStorage.getItem('synapse_demo_active') === 'true' || currentEmail.includes('demo');
-    const peersPool = discoveredPeers.length > 0
-      ? discoveredPeers
-      : MOCK_PEERS.map((mp, i) => ({
-          id: mp.id,
-          name: mp.name,
-          email: `${mp.name.toLowerCase().replace(' ', '.')}@synapse.edu`,
-          avatar: mp.avatar_url,
-          domain: mp.offers[0] || 'React',
-          level: (i % 3) + 2,
-          numeric_level: (i % 3) + 2,
-          offers: mp.offers,
-          needs: mp.needs,
-          onboarding_complete: true,
-        }));
+    // Use ONLY real discovered peers from network & database (No example/mock peers)
+    const peersPool = discoveredPeers;
 
     // Step 1 to 14: Execute the Autonomous Peer Matching Agent
     const activeOffers = customOffers && customOffers.length > 0 ? customOffers : canTeach;

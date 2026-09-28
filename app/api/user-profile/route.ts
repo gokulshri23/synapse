@@ -14,8 +14,8 @@ export async function GET(req: Request) {
     const normalized = email.trim().toLowerCase();
     let profile = getCloudProfile(normalized);
 
-    // If not in cloud cache, check Supabase profiles
-    if (!profile) {
+    // If not in cloud cache or onboarding not complete in cache, check Supabase profiles
+    if (!profile || !profile.onboarding_complete) {
       try {
         const supabase = createClient(
           process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -27,7 +27,7 @@ export async function GET(req: Request) {
           .eq('email', normalized)
           .maybeSingle();
 
-        if (data && !error) {
+        if (data && !error && data.onboarding_complete) {
           profile = saveCloudProfile({
             name: data.full_name || normalized.split('@')[0],
             email: normalized,
@@ -35,7 +35,7 @@ export async function GET(req: Request) {
             level: data.skill_level || 'intermediate',
             goal: data.learning_goal || '30-day sprint to skill mastery',
             score: 85,
-            onboarding_complete: Boolean(data.onboarding_complete),
+            onboarding_complete: true,
           });
         }
       } catch (err) {}
@@ -74,20 +74,42 @@ export async function POST(req: Request) {
       seekingGuidance: seekingGuidance || needs,
     });
 
-    // Also attempt remote sync to Supabase if connected
+    // Resilient sync to Supabase: find existing profile by email and update it
     try {
       const supabase = createClient(
         process.env.NEXT_PUBLIC_SUPABASE_URL!,
         process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
       );
-      await supabase.from('profiles').upsert({
-        email: saved.email,
-        full_name: saved.name,
-        skill_level: saved.level,
-        learning_goal: saved.goal,
-        onboarding_complete: true,
-      });
-    } catch (e) {}
+      const { data: existing } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('email', saved.email)
+        .maybeSingle();
+
+      if (existing?.id) {
+        await supabase
+          .from('profiles')
+          .update({
+            full_name: saved.name,
+            skill_level: saved.level,
+            learning_goal: saved.goal,
+            onboarding_complete: true,
+          })
+          .eq('id', existing.id);
+      } else {
+        await supabase
+          .from('profiles')
+          .upsert({
+            email: saved.email,
+            full_name: saved.name,
+            skill_level: saved.level,
+            learning_goal: saved.goal,
+            onboarding_complete: true,
+          });
+      }
+    } catch (e) {
+      console.warn('[user-profile] Supabase sync notice:', e);
+    }
 
     return NextResponse.json({ success: true, profile: saved });
   } catch (err: any) {

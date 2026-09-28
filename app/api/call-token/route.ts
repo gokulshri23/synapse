@@ -40,8 +40,12 @@ export async function POST(req: NextRequest) {
 
     // Generate room token / URL
     // Supports DAILY_API_KEY if configured in environment, otherwise generates a secure pair room
-    const roomName = `synapse-${sessionId.replace(/[^a-zA-Z0-9_-]/g, '')}-${Date.now().toString(36)}`;
-    let callUrl = `https://synapse-demo.daily.co/${roomName}`;
+    // Generate consistent room name for this pair session so both peers meet in the same room
+    const cleanSession = sessionId.replace(/[^a-zA-Z0-9_-]/g, '') || 'global_collab';
+    const roomName = `synapse-peer-${cleanSession}`;
+
+    // Reliable open WebRTC room (works immediately with zero API keys)
+    let callUrl = `https://meet.jit.si/${roomName}#config.startWithVideoMuted=${mode === 'voice'}&config.prejoinPageEnabled=false&config.disableDeepLinking=true&config.toolbarButtons=%5B'microphone','camera','desktop','chat','raisehand','tileview','hangup'%5D`;
 
     if (process.env.DAILY_API_KEY) {
       try {
@@ -52,13 +56,13 @@ export async function POST(req: NextRequest) {
             Authorization: `Bearer ${process.env.DAILY_API_KEY}`,
           },
           body: JSON.stringify({
-            name: roomName,
+            name: `${roomName}-${Date.now().toString(36)}`,
             properties: {
               enable_chat: false,
               enable_screenshare: true,
               start_video_off: mode === 'voice',
               start_audio_off: false,
-              exp: Math.floor(Date.now() / 1000) + 3600, // 1 hour expiration
+              exp: Math.floor(Date.now() / 1000) + 3600,
             },
           }),
         });
@@ -67,7 +71,7 @@ export async function POST(req: NextRequest) {
           callUrl = roomData.url;
         }
       } catch (e) {
-        console.warn('[call-token] Daily API call failed, using secure pair URL:', e);
+        console.warn('[call-token] Daily API call failed, using secure Jitsi URL:', e);
       }
     }
 
