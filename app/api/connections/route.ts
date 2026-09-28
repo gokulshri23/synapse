@@ -113,7 +113,7 @@ export async function POST(req: Request) {
                 recipient_id: recNorm,
                 recipient_name: recipientName || recNorm.split('@')[0],
                 skill_area: skillArea || 'General',
-                status: 'pending',
+                status: conn.status,
                 updated_at: new Date().toISOString(),
               })
               .eq('id', existing.id);
@@ -124,7 +124,7 @@ export async function POST(req: Request) {
               recipient_id: recNorm,
               recipient_name: recipientName || recNorm.split('@')[0],
               skill_area: skillArea || 'General',
-              status: 'pending',
+              status: conn.status,
             });
           }
         } catch (dbErr) {

@@ -30,6 +30,7 @@ export default function FlowLoginScene() {
         localStorage.removeItem('synapse_user_xp');
         localStorage.removeItem('synapse_skills_progress');
         localStorage.removeItem('synapse_pending_outgoing');
+        localStorage.removeItem('synapse_last_chat_messages');
         sessionStorage.clear();
       } else if (event === 'SIGNED_IN' && session?.user?.email) {
         const norm = session.user.email.toLowerCase();
@@ -76,6 +77,7 @@ export default function FlowLoginScene() {
       localStorage.removeItem('synapse_user_xp');
       localStorage.removeItem('synapse_skills_progress');
       localStorage.removeItem('synapse_pending_outgoing');
+      localStorage.removeItem('synapse_last_chat_messages');
 
       // Call the unified auth API (supports unlimited N accounts without email rate limits)
       const res = await fetch('/api/auth/unified', {

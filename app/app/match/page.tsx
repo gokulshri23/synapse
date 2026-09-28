@@ -492,6 +492,21 @@ export default function MatchPage() {
     setPendingOutgoing(updatedPending);
     localStorage.setItem('synapse_pending_outgoing', JSON.stringify(updatedPending));
 
+    // Save active peer immediately for seamless transition to Sessions
+    const activePeerObj: {
+      id: string;
+      name: string;
+      domain: string;
+      isReal: boolean;
+      connectionId?: string;
+    } = {
+      id: match.peerId,
+      name: match.peerName,
+      domain: match.primarySkill,
+      isReal: true,
+    };
+    localStorage.setItem('synapse_active_peer', JSON.stringify(activePeerObj));
+
     try {
       const res = await fetch('/api/connections', {
         method: 'POST',
@@ -507,7 +522,14 @@ export default function MatchPage() {
       });
 
       if (res.ok) {
-        setConnectToast(`Connection request sent to ${match.peerName}! Chat unlocks once accepted.`);
+        const resData = await res.json();
+        if (resData.connection?.status === 'accepted') {
+          activePeerObj.connectionId = resData.connection.id;
+          localStorage.setItem('synapse_active_peer', JSON.stringify(activePeerObj));
+          setConnectToast(`Connected with ${match.peerName}! Mutual match confirmed.`);
+        } else {
+          setConnectToast(`Connection request sent to ${match.peerName}! Chat unlocks once accepted.`);
+        }
         setTimeout(() => setConnectToast(null), 4500);
         fetchConnections(studentEmail);
       }

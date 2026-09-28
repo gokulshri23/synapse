@@ -204,6 +204,7 @@ export default function SettingsPage() {
       localStorage.removeItem('synapse_user_xp');
       localStorage.removeItem('synapse_skills_progress');
       localStorage.removeItem('synapse_pending_outgoing');
+      localStorage.removeItem('synapse_last_chat_messages');
       sessionStorage.clear();
       await supabase.auth.signOut();
     } catch (e) {}

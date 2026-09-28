@@ -152,21 +152,23 @@ export default function SessionsPage() {
     if (typeof window !== 'undefined') {
       try {
         const myKey = (localStorage.getItem('synapse_user_email') || localStorage.getItem('synapse_user_name') || 'user').trim().toLowerCase();
-        let peerKey = 'peer';
+        let peerKey = '';
         const savedPeer = localStorage.getItem('synapse_active_peer');
         if (savedPeer) {
           try {
             const p = JSON.parse(savedPeer);
-            peerKey = (p.id || p.name || 'peer').trim().toLowerCase();
+            if (p.id && !p.id.includes('peer-live') && p.name && !p.name.includes('Waiting for Peer')) {
+              peerKey = (p.id || p.name).trim().toLowerCase();
+            }
           } catch (e) {}
         }
-        const pairKey = 'synapse_chat_pair_' + [myKey, peerKey].sort().join('__');
-        const cached =
-          localStorage.getItem(pairKey) ||
-          localStorage.getItem('synapse_last_chat_messages');
-        if (cached) {
-          const parsed = JSON.parse(cached);
-          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (peerKey) {
+          const pairKey = 'synapse_chat_pair_' + [myKey, peerKey].sort().join('__');
+          const cached = localStorage.getItem(pairKey);
+          if (cached) {
+            const parsed = JSON.parse(cached);
+            if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+          }
         }
       } catch (e) {}
     }
@@ -388,72 +390,133 @@ function useAsync(asyncFn) {
       const autoJoinCall = sessionStorage.getItem('synapse_auto_join_call');
       if (autoJoinCall) {
         sessionStorage.removeItem('synapse_auto_join_call');
-        const parsedCall = JSON.parse(autoJoinCall);
-        if (parsedCall.callUrl) {
-          setCallUrl(parsedCall.callUrl);
-          setCallMode(parsedCall.callMode || 'video');
-          setIsCallModalOpen(true);
-        }
+        try {
+          const parsedCall = JSON.parse(autoJoinCall);
+          if (parsedCall.callUrl || parsedCall.roomName) {
+            if (parsedCall.callerId && parsedCall.callerName) {
+              setActivePeer({
+                id: parsedCall.callerId,
+                name: parsedCall.callerName,
+                initials: parsedCall.callerName.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase(),
+                skill: currentTrack + ' Track',
+                isReal: true,
+                connectionId: parsedCall.connectionId,
+              });
+            }
+            if (parsedCall.id || parsedCall.callId) {
+              setCurrentCallId(parsedCall.id || parsedCall.callId);
+            }
+            setActiveCallSessionId(parsedCall.roomName || parsedCall.callSessionId || `pair-${parsedCall.connectionId || 'call'}`);
+            setCallUrl(parsedCall.callUrl);
+            setCallMode(parsedCall.callMode || 'video');
+            setIsCallModalOpen(true);
+          }
+        } catch (e) {}
       }
     } catch (e) {}
 
-    // Check connection status and load all accepted friends
+    // Check connection status and periodically poll for newly accepted connections
+    let connInterval: any = null;
     if (currentEmail) {
-      fetch('/api/connections?userId=' + encodeURIComponent(currentEmail))
-        .then((res) => res.json())
-        .then((data) => {
-          const normMe = currentEmail.trim().toLowerCase();
-          const activeList = Array.isArray(data.active) ? data.active : [];
-          const friends: FriendItem[] = activeList.map((c: any) => {
-            const reqNorm = (c.requesterId || '').toLowerCase().trim();
-            const isReq = reqNorm === normMe;
-            const fEmail = isReq ? c.recipientId : c.requesterId;
-            const fName = isReq ? c.recipientName : c.requesterName;
-            return {
-              connectionId: c.id,
-              threadId: c.id,
-              friendEmail: fEmail,
-              friendName: fName || 'Friend',
-              skillArea: c.skillArea || 'General',
-              initials: (fName || 'FP')
-                .split(' ')
-                .map((n: string) => n[0])
-                .join('')
-                .slice(0, 2)
-                .toUpperCase(),
-              isReal: true,
-            };
-          });
-          setAcceptedFriends(friends);
-
-          if (friends.length > 0) {
-            const matched = friends.find(
-              (f) =>
-                f.friendEmail.toLowerCase() === peerId.toLowerCase() ||
-                f.connectionId === peerId ||
-                f.friendName.toLowerCase() === peerId.toLowerCase()
-            );
-            const chosen = matched || friends[0];
-            setActivePeer({
-              id: chosen.friendEmail,
-              name: chosen.friendName,
-              initials: chosen.initials,
-              skill: chosen.skillArea || currentTrack + ' Track',
-              isReal: true,
-              connectionId: chosen.connectionId,
+      const checkConnections = () => {
+        fetch('/api/connections?userId=' + encodeURIComponent(currentEmail))
+          .then((res) => res.json())
+          .then((data) => {
+            const normMe = currentEmail.trim().toLowerCase();
+            const activeList = Array.isArray(data.active) ? data.active : [];
+            const friends: FriendItem[] = activeList.map((c: any) => {
+              const reqNorm = (c.requesterId || '').toLowerCase().trim();
+              const isReq = reqNorm === normMe;
+              const fEmail = isReq ? c.recipientId : c.requesterId;
+              const fName = isReq ? c.recipientName : c.requesterName;
+              return {
+                connectionId: c.id,
+                threadId: c.id,
+                friendEmail: fEmail,
+                friendName: fName || 'Friend',
+                skillArea: c.skillArea || 'General',
+                initials: (fName || 'FP')
+                  .split(' ')
+                  .map((n: string) => n[0])
+                  .join('')
+                  .slice(0, 2)
+                  .toUpperCase(),
+                isReal: true,
+              };
             });
-            setIsConnectionAccepted(true);
-          } else {
-            const normPeer = peerId.trim().toLowerCase();
-            const isAccepted = activeList.some(
-              (c: any) => c.requesterId === normPeer || c.recipientId === normPeer
-            );
-            const outgoingList = Array.isArray(data.pendingOutgoing) ? data.pendingOutgoing : [];
-            const isPending = outgoingList.some((c: any) => c.recipientId === normPeer);
-            setIsConnectionAccepted(isPending && !isAccepted ? false : true);
-          }
-        })
-        .catch(() => setIsConnectionAccepted(true));
+            setAcceptedFriends(friends);
+
+            if (friends.length > 0) {
+              setActivePeer((prev) => {
+                const matched = friends.find(
+                  (f) =>
+                    f.friendEmail.toLowerCase() === prev.id.toLowerCase() ||
+                    f.connectionId === prev.connectionId ||
+                    f.friendName.toLowerCase() === prev.name.toLowerCase()
+                );
+                if (matched) {
+                  return {
+                    id: matched.friendEmail,
+                    name: matched.friendName,
+                    initials: matched.initials,
+                    skill: matched.skillArea || currentTrack + ' Track',
+                    isReal: true,
+                    connectionId: matched.connectionId,
+                  };
+                }
+                if (prev.id === 'peer-live' || prev.name.includes('Waiting') || !prev.isReal) {
+                  const chosen = friends[0];
+                  try {
+                    localStorage.setItem(
+                      'synapse_active_peer',
+                      JSON.stringify({
+                        id: chosen.friendEmail,
+                        name: chosen.friendName,
+                        domain: chosen.skillArea || currentTrack,
+                        isReal: true,
+                        connectionId: chosen.connectionId,
+                      })
+                    );
+                  } catch (e) {}
+                  return {
+                    id: chosen.friendEmail,
+                    name: chosen.friendName,
+                    initials: chosen.initials,
+                    skill: chosen.skillArea || currentTrack + ' Track',
+                    isReal: true,
+                    connectionId: chosen.connectionId,
+                  };
+                }
+                return prev;
+              });
+              setIsConnectionAccepted(true);
+            } else {
+              const outgoingList = Array.isArray(data.pendingOutgoing) ? data.pendingOutgoing : [];
+              if (outgoingList.length > 0) {
+                const pendingOne = outgoingList[0];
+                setActivePeer((prev) => {
+                  if (prev.id === 'peer-live' || prev.name.includes('Waiting')) {
+                    const pName = pendingOne.recipientName || 'Peer';
+                    return {
+                      id: pendingOne.recipientId,
+                      name: `${pName} (Waiting for Acceptance)`,
+                      initials: pName.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase(),
+                      skill: pendingOne.skillArea || currentTrack + ' Track',
+                      isReal: true,
+                      connectionId: pendingOne.id,
+                    };
+                  }
+                  return prev;
+                });
+                setIsConnectionAccepted(false);
+              }
+            }
+          })
+          .catch(() => {});
+      };
+
+      checkConnections();
+      connInterval = setInterval(checkConnections, 3000);
     }
 
     // Fetch collaborative challenge & rubric
@@ -485,6 +548,10 @@ function useAsync(asyncFn) {
         body: JSON.stringify({ name: currentName, email: currentEmail, domain: currentTrack })
       }).catch(() => {});
     }
+
+    return () => {
+      if (connInterval) clearInterval(connInterval);
+    };
   }, []);
 
   // ─── Friend Switcher Handler ──────────────────────────────────
@@ -519,49 +586,31 @@ function useAsync(asyncFn) {
     ? activePeer.connectionId
     : `pair__${[(studentEmail || studentName || 'learner').trim().toLowerCase(), (activePeer.id || activePeer.name || 'peer').trim().toLowerCase()].sort().join('__')}`;
 
-  // Synchronize messages to local storage whenever they change
+  // Synchronize messages to local storage whenever they change (scoped strictly to currentThreadId)
   useEffect(() => {
-    if (messages.length > 0 && typeof window !== 'undefined') {
+    if (messages.length > 0 && typeof window !== 'undefined' && currentThreadId) {
       try {
-        localStorage.setItem('synapse_last_chat_messages', JSON.stringify(messages));
-        if (currentThreadId) {
-          localStorage.setItem('synapse_chat_' + currentThreadId, JSON.stringify(messages));
-        }
+        localStorage.setItem('synapse_chat_' + currentThreadId, JSON.stringify(messages));
         const myKey = (studentEmail || studentName || 'user').trim().toLowerCase();
         const peerKey = (activePeer.id || activePeer.name || 'peer').trim().toLowerCase();
-        const pairKey = 'synapse_chat_pair_' + [myKey, peerKey].sort().join('__');
-        localStorage.setItem(pairKey, JSON.stringify(messages));
+        if (peerKey && peerKey !== 'peer' && !peerKey.includes('peer-live')) {
+          const pairKey = 'synapse_chat_pair_' + [myKey, peerKey].sort().join('__');
+          localStorage.setItem(pairKey, JSON.stringify(messages));
+        }
       } catch (e) {}
     }
   }, [messages, currentThreadId, studentEmail, studentName, activePeer.id, activePeer.name]);
 
+  const prevThreadIdRef = useRef<string>('');
+
   const fetchThreadMessages = useCallback(async (tId: string) => {
     if (!tId) return;
-
-    // Immediately restore cached thread messages if state is currently empty
-    if (typeof window !== 'undefined') {
-      try {
-        const myKey = (studentEmail || studentName || 'user').trim().toLowerCase();
-        const peerKey = (activePeer.id || activePeer.name || 'peer').trim().toLowerCase();
-        const pairKey = 'synapse_chat_pair_' + [myKey, peerKey].sort().join('__');
-        const cached =
-          localStorage.getItem('synapse_chat_' + tId) ||
-          localStorage.getItem(pairKey) ||
-          localStorage.getItem('synapse_last_chat_messages');
-        if (cached) {
-          const parsed = JSON.parse(cached);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            setMessages((prev) => (prev.length === 0 ? parsed : prev));
-          }
-        }
-      } catch (e) {}
-    }
 
     try {
       const res = await fetch('/api/messages?threadId=' + encodeURIComponent(tId) + '&limit=50');
       if (res.ok) {
         const data = await res.json();
-        if (Array.isArray(data.messages) && data.messages.length > 0) {
+        if (Array.isArray(data.messages)) {
           const myEmailLower = (studentEmail || studentName || '').trim().toLowerCase();
           const loaded: ChatMessage[] = data.messages.map((m: any) => ({
             id: m.id,
@@ -576,22 +625,39 @@ function useAsync(asyncFn) {
             status: 'sent' as const,
           }));
 
-          setMessages((prev) => {
-            if (prev.length === 0) return loaded;
-            // Merge deduplicated by message id or content
-            const existingIds = new Set(prev.map((p) => p.id));
-            const newOnes = loaded.filter((l) => !existingIds.has(l.id));
-            if (newOnes.length === 0) return prev;
-            return [...prev, ...newOnes];
-          });
+          setMessages(loaded);
           setTimeout(() => scrollToBottom(true), 60);
         }
       }
     } catch (e) {}
-  }, [studentEmail, studentName, activePeer.id, activePeer.name, scrollToBottom]);
+  }, [studentEmail, studentName, scrollToBottom]);
 
   useEffect(() => {
     if (!currentThreadId) return;
+
+    // When thread changes, cleanly isolate and load that specific thread's cache
+    if (prevThreadIdRef.current !== currentThreadId) {
+      prevThreadIdRef.current = currentThreadId;
+      if (typeof window !== 'undefined') {
+        const myKey = (studentEmail || studentName || 'user').trim().toLowerCase();
+        const peerKey = (activePeer.id || activePeer.name || 'peer').trim().toLowerCase();
+        const pairKey = 'synapse_chat_pair_' + [myKey, peerKey].sort().join('__');
+        const cached = localStorage.getItem('synapse_chat_' + currentThreadId) || (peerKey && !peerKey.includes('peer-live') ? localStorage.getItem(pairKey) : null);
+        if (cached) {
+          try {
+            const parsed = JSON.parse(cached);
+            setMessages(Array.isArray(parsed) ? parsed : []);
+          } catch (e) {
+            setMessages([]);
+          }
+        } else {
+          setMessages([]);
+        }
+      } else {
+        setMessages([]);
+      }
+    }
+
     fetchThreadMessages(currentThreadId);
 
     // Periodic backup sync (fallback if websocket disconnected)
@@ -1285,8 +1351,9 @@ function useAsync(asyncFn) {
     // Check study assistant for confusion signals
     triggerStudyAssistantCheck([...messages, optimisticMsg]);
 
-    // AI peer response for demo/AI peers
-    if (!activePeer.isReal || activePeer.name.includes('Demo') || activePeer.name.includes('Waiting')) {
+    // AI peer response ONLY for explicit demo peers (never for real peers or while waiting)
+    const isDemoPeer = activePeer.id === 'peer-maya' || activePeer.id.includes('demo') || activePeer.name.includes('Demo Peer');
+    if (isDemoPeer) {
       setIsPeerTyping(true);
       try {
         const res = await fetch('/api/peer-chat', {

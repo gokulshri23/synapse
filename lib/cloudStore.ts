@@ -714,6 +714,13 @@ export function createConnection(
   // If connection already exists, return existing or reset if previously declined/cancelled
   if (store.connections[connKey]) {
     const existing = store.connections[connKey];
+    // Mutual handshake: If the other user already sent a pending request to this user, auto-accept immediately!
+    if (existing.status === 'pending' && existing.requesterId === recNorm && existing.recipientId === reqNorm) {
+      existing.status = 'accepted';
+      existing.updatedAt = new Date().toISOString();
+      saveStore(store);
+      return existing;
+    }
     if (existing.status === 'declined' || existing.status === 'cancelled') {
       existing.status = 'pending';
       existing.requesterId = reqNorm;

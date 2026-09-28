@@ -80,15 +80,7 @@ export default function DailyPrebuiltCall({
 
   // ─── Initialize Daily Prebuilt Frame ──────────────────────────
   const setupDailyFrame = useCallback(async (audioOnlyFallback = false) => {
-    if (!containerRef.current) return;
-    if (frameCreatingRef.current || callFrameRef.current) return;
-
-    frameCreatingRef.current = true;
-    setIsLoading(true);
-    setErrorMessage(null);
-    setErrorType(null);
-
-    // If open WebRTC URL (non-Daily domain), iframe fallback will render
+    // If open WebRTC URL (non-Daily domain), iframe fallback will render immediately
     if (!isDailyHosted) {
       setIsLoading(false);
       setConnectionState('connected');
@@ -96,6 +88,14 @@ export default function DailyPrebuiltCall({
       frameCreatingRef.current = false;
       return;
     }
+
+    if (!containerRef.current) return;
+    if (frameCreatingRef.current || callFrameRef.current) return;
+
+    frameCreatingRef.current = true;
+    setIsLoading(true);
+    setErrorMessage(null);
+    setErrorType(null);
 
     try {
       // 1. Create Frame with Daily Prebuilt
@@ -260,8 +260,15 @@ export default function DailyPrebuiltCall({
       setupDailyFrame(false);
     }
 
+    const watchdog = setTimeout(() => {
+      if (isMounted) {
+        setIsLoading(false);
+      }
+    }, 3500);
+
     return () => {
       isMounted = false;
+      clearTimeout(watchdog);
       destroyCallFrame();
     };
   }, [setupDailyFrame, destroyCallFrame]);
@@ -370,6 +377,7 @@ export default function DailyPrebuiltCall({
         /* Zero-config open WebRTC iframe fallback if no DAILY_API_KEY is present */
         <iframe
           src={roomUrl}
+          onLoad={() => setIsLoading(false)}
           allow="camera; microphone; display-capture; autoplay; clipboard-write"
           className="w-full h-full flex-1 border-0 rounded-2xl"
           style={{ minHeight: '420px' }}

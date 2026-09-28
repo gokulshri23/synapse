@@ -94,6 +94,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       localStorage.removeItem('synapse_user_xp');
       localStorage.removeItem('synapse_skills_progress');
       localStorage.removeItem('synapse_pending_outgoing');
+      localStorage.removeItem('synapse_last_chat_messages');
       sessionStorage.clear();
       await supabase.auth.signOut();
     } catch (e) {
@@ -124,7 +125,11 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               const callUrl = `https://meet.jit.si/${active.room_name}#config.startWithVideoMuted=${active.type === 'voice'}&config.prejoinPageEnabled=false&config.disableDeepLinking=true&userInfo.displayName="${displayName}"`;
               setGlobalIncomingCall({
                 id: active.id,
+                callerId: active.caller_id,
                 callerName: active.caller_name || 'Peer Partner',
+                callerAvatar: active.caller_avatar || null,
+                connectionId: active.connection_id,
+                roomName: active.room_name,
                 callUrl,
                 callMode: active.type === 'voice' ? 'voice' : 'video',
               });
@@ -144,6 +149,25 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   const handleAcceptGlobalCall = () => {
     if (!globalIncomingCall) return;
+    fetch('/api/calls', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ callId: globalIncomingCall.id, status: 'accepted' }),
+    }).catch(() => {});
+
+    if (globalIncomingCall.callerId) {
+      localStorage.setItem(
+        'synapse_active_peer',
+        JSON.stringify({
+          id: globalIncomingCall.callerId,
+          name: globalIncomingCall.callerName,
+          domain: 'Pair Study',
+          isReal: true,
+          connectionId: globalIncomingCall.connectionId,
+        })
+      );
+    }
+
     sessionStorage.setItem('synapse_auto_join_call', JSON.stringify(globalIncomingCall));
     setGlobalIncomingCall(null);
     router.push('/app/sessions');
