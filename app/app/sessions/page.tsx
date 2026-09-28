@@ -580,11 +580,13 @@ function useAsync(asyncFn) {
   };
 
   // ─── Part H / BUG 5: Thread Messages Persistence & Realtime ───
+  // CRITICAL: Both devices MUST compute the same thread ID. Using connectionId is unreliable 
+  // because one device may have it before the other. Use deterministic pair-based email key instead.
+  const myEmailKey = (studentEmail || studentName || 'learner').trim().toLowerCase();
+  const peerEmailKey = (activePeer.id || activePeer.name || 'peer').trim().toLowerCase();
   const currentThreadId = activeStudyRoom?.room?.id
     ? `room__${activeStudyRoom.room.id}`
-    : activePeer.connectionId
-    ? activePeer.connectionId
-    : `pair__${[(studentEmail || studentName || 'learner').trim().toLowerCase(), (activePeer.id || activePeer.name || 'peer').trim().toLowerCase()].sort().join('__')}`;
+    : `pair__${[myEmailKey, peerEmailKey].sort().join('__')}`;
 
   // Synchronize messages to local storage whenever they change (scoped strictly to currentThreadId)
   useEffect(() => {
@@ -1062,6 +1064,21 @@ function useAsync(asyncFn) {
     // Student controls: check session toggle and 10-minute cooldown
     if (assistantDisabledForSession) return;
     if (Date.now() < assistantSuppressedUntil) return;
+
+    // Guard 1: Need at least 3 messages before AI assistant can trigger
+    const userMsgs = recentMsgs.filter((m) => m.sender === 'me');
+    if (userMsgs.length < 3) return;
+
+    // Guard 2: Latest message must be at least 10 characters (not random keysmash)
+    const latestUserMsg = userMsgs[userMsgs.length - 1];
+    if (!latestUserMsg || (latestUserMsg.text || '').trim().length < 10) return;
+
+    // Guard 3: Detect gibberish — if latest message has 4+ consonants in a row (no vowels/spaces), skip
+    const gibberishPattern = /[^aeiou\s\d.,!?@#]{5,}/i;
+    const latestText = (latestUserMsg.text || '').trim();
+    const words = latestText.split(/\s+/);
+    const gibberishWords = words.filter((w) => gibberishPattern.test(w));
+    if (gibberishWords.length > words.length * 0.5) return; // More than 50% gibberish words = skip
 
     try {
       const sId = getSessionId();
