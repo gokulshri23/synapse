@@ -51,10 +51,13 @@ export async function GET(req: Request) {
               // Don't return signals sent by self
               if (sSender === normUser || senderPrefix === userPrefix) continue;
 
-              // Check recipient
-              const sRec = (item.sender_name || '').toLowerCase().trim();
-              const recPrefix = sRec.split('@')[0];
-              if (sRec && sRec !== normUser && recPrefix !== userPrefix) continue;
+              // In 1-on-1 private rooms, all signals not sent by me are intended for me
+              const isPairSession = sessionId.startsWith('pair-') || sessionId.startsWith('pair__') || sessionId.includes('_');
+              if (!isPairSession) {
+                const sRec = (item.sender_name || '').toLowerCase().trim();
+                const recPrefix = sRec.split('@')[0];
+                if (sRec && sRec !== 'peer' && sRec !== 'all' && sRec !== normUser && recPrefix !== userPrefix) continue;
+              }
 
               let parsedPayload: any = {};
               try {

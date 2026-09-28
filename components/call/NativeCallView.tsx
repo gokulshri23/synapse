@@ -102,9 +102,21 @@ export default function NativeCallView({
   const isHttps =
     typeof window !== 'undefined' ? window.location.protocol === 'https:' : false;
 
+  const callDurationRef = useRef<number>(0);
+  const onEndCallRef = useRef(onEndCall);
+  useEffect(() => {
+    onEndCallRef.current = onEndCall;
+  }, [onEndCall]);
+
   // ─── Call Duration Counter ──────────────────────────────────
   useEffect(() => {
-    const timer = setInterval(() => setCallDuration((d) => d + 1), 1000);
+    const timer = setInterval(() => {
+      setCallDuration((d) => {
+        const next = d + 1;
+        callDurationRef.current = next;
+        return next;
+      });
+    }, 1000);
     return () => clearInterval(timer);
   }, []);
 
@@ -367,9 +379,9 @@ export default function NativeCallView({
       } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'closed') {
         setTimeout(() => {
           if (pc.connectionState === 'disconnected' || pc.connectionState === 'closed') {
-            onEndCall(callDuration);
+            onEndCallRef.current(callDurationRef.current);
           }
-        }, 1000);
+        }, 1500);
       }
     };
 
@@ -383,7 +395,11 @@ export default function NativeCallView({
     // Transmit local ICE candidate to peer
     pc.onicecandidate = (event) => {
       if (event.candidate) {
-        sendSignal('webrtc_candidate', event.candidate);
+        sendSignal('webrtc_candidate', event.candidate.toJSON ? event.candidate.toJSON() : {
+          candidate: event.candidate.candidate,
+          sdpMid: event.candidate.sdpMid,
+          sdpMLineIndex: event.candidate.sdpMLineIndex,
+        });
       }
     };
 
@@ -400,8 +416,9 @@ export default function NativeCallView({
         sendSignal('webrtc_offer', offer);
       } catch (e) {}
     }
-  }, [mode, myId, targetPeerId, effectiveRoomName, isInitiator, sendSignal, setupLocalAudioMeter, setupRemoteAudioMeter, refreshDevices, callDuration, onEndCall]);
+  }, [mode, myId, targetPeerId, effectiveRoomName, isInitiator, sendSignal, setupLocalAudioMeter, setupRemoteAudioMeter, refreshDevices]);
 
+  // Mount media & WebRTC connection ONCE. Do NOT recreate on every timer tick!
   useEffect(() => {
     initConnection();
 
@@ -414,7 +431,8 @@ export default function NativeCallView({
       if (screenStreamRef.current) screenStreamRef.current.getTracks().forEach((t) => t.stop());
       if (pcRef.current) pcRef.current.close();
     };
-  }, [initConnection]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Ensure local video element rebinds when camera toggles
   useEffect(() => {
@@ -426,14 +444,22 @@ export default function NativeCallView({
     }
   }, [videoOff, mode]);
 
-  // ─── WebRTC Signaling Poller (250ms interval) ─────────────────
+  // ─── WebRTC Signaling Poller (350ms interval) ─────────────────
   useEffect(() => {
     let isMounted = true;
-    let lastSince = Date.now() - 20000;
+    let lastSince = Date.now() - 30000;
+    let pollCount = 0;
 
     const pollSignals = async () => {
       const pc = pcRef.current;
       if (!pc || pc.signalingState === 'closed') return;
+
+      pollCount++;
+      // If initiator and still waiting for answer after ~3s, re-broadcast the offer in case callee just joined
+      const shouldInitiate = typeof isInitiator === 'boolean' ? isInitiator : myId < targetPeerId;
+      if (shouldInitiate && pc.signalingState === 'have-local-offer' && pc.localDescription && pollCount % 8 === 0) {
+        sendSignal('webrtc_offer', pc.localDescription);
+      }
 
       try {
         const res = await fetch(
@@ -461,7 +487,7 @@ export default function NativeCallView({
               // Flush queued candidates
               while (pendingCandidatesRef.current.length > 0) {
                 const cand = pendingCandidatesRef.current.shift();
-                if (cand) {
+                if (cand && (cand.candidate || cand.candidate === '')) {
                   await currentPc.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
                 }
               }
@@ -475,15 +501,17 @@ export default function NativeCallView({
                 // Flush queued candidates
                 while (pendingCandidatesRef.current.length > 0) {
                   const cand = pendingCandidatesRef.current.shift();
-                  if (cand) {
+                  if (cand && (cand.candidate || cand.candidate === '')) {
                     await currentPc.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
                   }
                 }
               }
             } else if (sig.type === 'webrtc_candidate') {
               if (currentPc.remoteDescription && currentPc.remoteDescription.type) {
-                await currentPc.addIceCandidate(new RTCIceCandidate(sig.payload)).catch(() => {});
-              } else {
+                if (sig.payload && (sig.payload.candidate || sig.payload.candidate === '')) {
+                  await currentPc.addIceCandidate(new RTCIceCandidate(sig.payload)).catch(() => {});
+                }
+              } else if (sig.payload) {
                 pendingCandidatesRef.current.push(sig.payload);
               }
             } else if (sig.type === 'screen_share_start') {
@@ -491,7 +519,7 @@ export default function NativeCallView({
             } else if (sig.type === 'screen_share_stop') {
               setIsRemoteScreenSharing(false);
             } else if (sig.type === 'webrtc_call_end') {
-              onEndCall(callDuration);
+              onEndCallRef.current(callDurationRef.current);
               return;
             }
           }
@@ -500,12 +528,12 @@ export default function NativeCallView({
     };
 
     pollSignals();
-    const interval = setInterval(pollSignals, 250);
+    const interval = setInterval(pollSignals, 350);
     return () => {
       isMounted = false;
       clearInterval(interval);
     };
-  }, [myId, effectiveRoomName, sendSignal, callDuration, onEndCall]);
+  }, [effectiveRoomName, myId, targetPeerId, isInitiator, sendSignal]);
 
   // ─── Handle Microphone Mute / Unmute ──────────────────────────
   const toggleMic = () => {
@@ -642,8 +670,8 @@ export default function NativeCallView({
   };
 
   const handleLocalEndCall = () => {
-    sendSignal('webrtc_call_end', { callDuration });
-    onEndCall(callDuration);
+    sendSignal('webrtc_call_end', { callDuration: callDurationRef.current });
+    onEndCallRef.current(callDurationRef.current);
   };
 
   const peerInitials = peerName
