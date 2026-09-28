@@ -144,3 +144,65 @@ CREATE POLICY "Allow all authenticated users" ON public.messages FOR ALL TO auth
 CREATE POLICY "Allow all authenticated users" ON public.artifacts FOR ALL TO authenticated USING (true);
 CREATE POLICY "Allow all authenticated users" ON public.reputation FOR ALL TO authenticated USING (true);
 CREATE POLICY "Allow all authenticated users" ON public.daily_missions FOR ALL TO authenticated USING (true);
+
+-- =========================================================================
+-- Finals Upgrade: New Tables
+-- =========================================================================
+
+-- Part A: Skill Declarations (replaces self-declared levels)
+CREATE TABLE IF NOT EXISTS public.skill_declarations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE,
+  skill TEXT NOT NULL,
+  intent TEXT NOT NULL CHECK (intent IN ('teach', 'learn')),
+  status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'verified', 'rejected')),
+  verified_level INTEGER DEFAULT 0,
+  quiz_score NUMERIC DEFAULT 0,
+  attempt_count INTEGER DEFAULT 0,
+  evidence_url TEXT,
+  last_attempt_at TIMESTAMP WITH TIME ZONE,
+  subtopic_scores JSONB DEFAULT '{}'::jsonb,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- Part B: Match Health Tracking
+CREATE TABLE IF NOT EXISTS public.match_health (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  match_id TEXT NOT NULL,
+  learner_id TEXT NOT NULL,
+  teacher_id TEXT NOT NULL,
+  skill TEXT NOT NULL,
+  session_number INTEGER DEFAULT 1,
+  pre_score NUMERIC DEFAULT 0,
+  post_score NUMERIC DEFAULT 0,
+  delta NUMERIC DEFAULT 0,
+  autonomous_action TEXT,
+  action_reason TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- Part E: Network Gaps
+CREATE TABLE IF NOT EXISTS public.network_gaps (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  skill TEXT NOT NULL,
+  learner_ids JSONB DEFAULT '[]'::jsonb,
+  resolved BOOLEAN DEFAULT FALSE,
+  resolution TEXT,
+  timestamp TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- Part H: Enhance messages table with new columns
+ALTER TABLE public.messages ADD COLUMN IF NOT EXISTS type TEXT DEFAULT 'text';
+ALTER TABLE public.messages ADD COLUMN IF NOT EXISTS voice_url TEXT;
+ALTER TABLE public.messages ADD COLUMN IF NOT EXISTS reactions JSONB DEFAULT '[]'::jsonb;
+ALTER TABLE public.messages ADD COLUMN IF NOT EXISTS flagged BOOLEAN DEFAULT FALSE;
+ALTER TABLE public.messages ADD COLUMN IF NOT EXISTS reply_to_id UUID;
+
+-- RLS for new tables
+ALTER TABLE public.skill_declarations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.match_health ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.network_gaps ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Allow all authenticated users" ON public.skill_declarations FOR ALL TO authenticated USING (true);
+CREATE POLICY "Allow all authenticated users" ON public.match_health FOR ALL TO authenticated USING (true);
+CREATE POLICY "Allow all authenticated users" ON public.network_gaps FOR ALL TO authenticated USING (true);

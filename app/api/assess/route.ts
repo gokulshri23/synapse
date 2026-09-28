@@ -48,12 +48,30 @@ export async function POST(req: Request) {
       return NextResponse.json({ score, correct, total, feedback: `You got ${correct} out of ${total} correct.` });
     }
 
-    const { skill, level } = body;
+    const { skill, level, mode, retake, previousQuestions } = body;
     try {
+      let prompt = `Generate 3 multiple choice questions for ${skill} at ${level} level. 
+        Return strictly JSON as an array of objects: [{ "question": "string", "options": ["string", "string", "string", "string"], "answerIndex": number }]. Do not include any other text.`;
+      
+      if (mode === 'teaching-verification') {
+        prompt = `Generate 5 challenging multiple-choice questions to verify if someone is qualified to TEACH ${skill}. Focus on:
+   - Deep conceptual understanding
+   - Common student misconceptions
+   - Teaching methodology (how to explain concepts)
+   - Prerequisite knowledge mapping
+   Each question should have 4 options. Return strictly JSON as an array of objects: [{"question": "string", "options": ["string","string","string","string"], "answerIndex": number}]. No other text.`;
+      } else if (mode === 'placement-diagnostic') {
+        prompt = `Generate 4 diagnostic placement questions for ${skill}. These are NOT a test - they help us understand where the learner is starting from. Level 0 (no prior knowledge) is completely valid. Use encouraging language. Questions should range from very basic to intermediate. Return strictly JSON as an array of objects: [{"question": "string", "options": ["string","string","string","string"], "answerIndex": number}]. No other text.`;
+      }
+
+      if (retake && Array.isArray(previousQuestions) && previousQuestions.length > 0) {
+        const prevText = previousQuestions.map((q: any) => q.question).join(' | ');
+        prompt += `\nIMPORTANT: Do NOT repeat or closely resemble any of these previously asked questions: [${prevText}]`;
+      }
+
       const response = await ai.models.generateContent({
         model: 'gemini-3.6-flash',
-        contents: `Generate 3 multiple choice questions for ${skill} at ${level} level. 
-        Return strictly JSON as an array of objects: [{ "question": "string", "options": ["string", "string", "string", "string"], "answerIndex": number }]. Do not include any other text.`
+        contents: prompt
       });
       
       let text = response.text || '';

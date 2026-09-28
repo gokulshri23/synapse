@@ -12,6 +12,8 @@ interface ProctoredQuizProps {
     level: string;
     violationsCount: number;
     passed: boolean;
+    invalidated?: boolean;
+    reason?: string;
   }) => void;
   onCancel?: () => void;
 }
@@ -44,6 +46,25 @@ export default function ProctoredQuiz({ skill, level, onComplete, onCancel }: Pr
   const [proctorLogs, setProctorLogs] = useState<Array<{ time: string; msg: string; type: 'info' | 'warn' | 'ok' }>>([]);
   const [isWarmedUp, setIsWarmedUp] = useState(false);
   const [warmupSeconds, setWarmupSeconds] = useState(3);
+
+  // Part F1
+  const permissionGranted = useRef<boolean>(false);
+  const [violationsEnabled, setViolationsEnabled] = useState(false);
+  
+  // Part F2
+  const faceApiRef = useRef<any>(null);
+  const noFaceStartRef = useRef<number | null>(null);
+  const [faceStatus, setFaceStatus] = useState<'ok' | 'no_face' | 'multiple_faces'>('ok');
+
+  // Part G
+  const STRIKE_THRESHOLD = 3;
+
+  useEffect(() => {
+    if (isWarmedUp) {
+      const t = setTimeout(() => setViolationsEnabled(true), 2000);
+      return () => clearTimeout(t);
+    }
+  }, [isWarmedUp]);
 
   // Audio Alert Sound (Web Audio API)
   const playAlertSound = useCallback(() => {
@@ -130,6 +151,7 @@ export default function ProctoredQuiz({ skill, level, onComplete, onCancel }: Pr
             video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
             audio: false
           });
+          permissionGranted.current = true;
 
           if (!isActive) {
             stream.getTracks().forEach(t => t.stop());
@@ -144,6 +166,17 @@ export default function ProctoredQuiz({ skill, level, onComplete, onCancel }: Pr
                 setCameraActive(true);
                 setProctorStatus('normal');
                 addLog('Webcam live feed engaged. 3-second grace calibration started.', 'ok');
+
+                // Load face-api.js dynamically
+                (async () => {
+                  try {
+                    const faceapi = await import('face-api.js');
+                    faceApiRef.current = faceapi;
+                    await faceapi.nets.tinyFaceDetector.loadFromUri('/models');
+                  } catch (err) {
+                    console.warn('[ProctoredQuiz] face-api.js not available, falling back to server-side vision');
+                  }
+                })();
 
                 // 3-second warm-up grace period: never evaluate before stream is confirmed live
                 let remaining = 3;
@@ -188,6 +221,7 @@ export default function ProctoredQuiz({ skill, level, onComplete, onCancel }: Pr
   // 3. Tab-Switch Anti-Cheating Detection (Strictly visibilitychange — NO blur listener to avoid false strikes)
   useEffect(() => {
     const handleVisibilityChange = () => {
+      if (!permissionGranted.current || !isWarmedUp || !violationsEnabled) return;
       if (document.hidden && !quizFinished) {
         triggerTabViolation('Tab switched or browser minimized');
       }
@@ -198,19 +232,74 @@ export default function ProctoredQuiz({ skill, level, onComplete, onCancel }: Pr
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [quizFinished]);
+  }, [quizFinished, isWarmedUp, violationsEnabled]);
 
   const triggerTabViolation = (reason: string) => {
     playAlertSound();
     setTabViolations(prev => {
       const next = prev + 1;
-      setShowViolationModal(true);
-      setProctorStatus('alert');
-      setAlertReason(`Unauthorized tab switch (${next}/3 strikes)`);
-      addLog(`Violation: ${reason} (Strike ${next}/3)`, 'warn');
+      
+      if (next >= STRIKE_THRESHOLD) {
+        setTimeout(() => {
+          setQuizFinished(true);
+          setFinalScore(-1);
+          onComplete({
+            score: -1,
+            skill,
+            level,
+            violationsCount: next,
+            passed: false,
+            invalidated: true,
+            reason: 'integrity_violation'
+          });
+        }, 0);
+      } else {
+        setShowViolationModal(true);
+        setProctorStatus('alert');
+        setAlertReason(`Integrity violation (${next}/${STRIKE_THRESHOLD} strikes)`);
+      }
+      
+      addLog(`Violation: ${reason} (Strike ${next}/${STRIKE_THRESHOLD})`, 'warn');
       return next;
     });
   };
+
+  // Face detection interval (runs every 2 seconds)
+  useEffect(() => {
+    if (!cameraActive || !isWarmedUp || quizFinished) return;
+
+    const faceInterval = setInterval(async () => {
+      if (!faceApiRef.current || !videoRef.current || quizFinished) return;
+      try {
+        const detections = await faceApiRef.current.detectAllFaces(
+          videoRef.current, 
+          new faceApiRef.current.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 })
+        );
+        
+        if (detections.length === 0) {
+          if (!noFaceStartRef.current) {
+            noFaceStartRef.current = Date.now();
+          } else if (Date.now() - noFaceStartRef.current > 3000) {
+            setFaceStatus('no_face');
+            triggerTabViolation('No face detected — please stay visible to the camera');
+            noFaceStartRef.current = null;
+          }
+          setFaceStatus('no_face');
+        } else if (detections.length > 1) {
+          setFaceStatus('multiple_faces');
+          triggerTabViolation('Multiple faces detected — only the test-taker should be visible');
+          noFaceStartRef.current = null;
+        } else {
+          setFaceStatus('ok');
+          noFaceStartRef.current = null;
+        }
+      } catch (err) {
+        // Silently fail
+      }
+    }, 2000);
+
+    return () => clearInterval(faceInterval);
+  }, [cameraActive, isWarmedUp, quizFinished]);
 
   // 4. Intelligent Non-Blocking Cloud Vision Proctoring (Gemini 3.6 Flash)
   // ONLY runs AFTER the 3-second grace calibration has completed!
@@ -372,6 +461,11 @@ export default function ProctoredQuiz({ skill, level, onComplete, onCancel }: Pr
                   <span className={`w-2 h-2 rounded-full ${isWarmedUp ? 'bg-ok animate-pulse' : 'bg-amber animate-ping'}`} />
                   {isWarmedUp ? 'LIVE PROCTOR' : `CALIBRATING (${warmupSeconds}s)`}
                 </span>
+
+                <span className="bg-black/60 px-1.5 py-0.5 rounded text-[14px]" title="Face Status">
+                  {faceStatus === 'ok' ? '👤' : faceStatus === 'no_face' ? '🚫' : '👥'}
+                </span>
+
                 <span className="text-white/90 px-1.5 py-0.5 rounded bg-black/60 font-semibold">
                   GEMINI 3.6 VISION
                 </span>
@@ -540,19 +634,29 @@ export default function ProctoredQuiz({ skill, level, onComplete, onCancel }: Pr
       ) : (
         /* Final Score & Grade Reveal */
         <div className="bg-card p-6 sm:p-8 rounded-2xl border border-border flex flex-col items-center text-center gap-5 animate-fade-in">
-          <div className="w-20 h-20 rounded-full bg-ok/15 border-2 border-ok text-ok flex items-center justify-center text-4xl shadow-sm">
-            ✓
-          </div>
+          
+          {finalScore === -1 ? (
+            <div className="w-full bg-bad/10 border border-bad text-bad p-4 rounded-xl mb-2">
+              <h3 className="font-bold text-lg mb-1">Attempt Invalidated</h3>
+              <p className="text-sm">Your attempt has been invalidated due to integrity violations. You may retake with fresh questions after a 24-hour cooldown.</p>
+            </div>
+          ) : (
+            <div className="w-20 h-20 rounded-full bg-ok/15 border-2 border-ok text-ok flex items-center justify-center text-4xl shadow-sm">
+              ✓
+            </div>
+          )}
 
           <div>
             <span className="text-xs uppercase font-semibold text-muted tracking-wider">
               College Assessment Completed
             </span>
             <h3 className="text-2xl sm:text-3xl font-serif font-bold text-ink mt-1">
-              Score: {finalScore}%
+              Score: {finalScore === -1 ? 'N/A' : `${finalScore}%`}
             </h3>
             <p className="text-sm text-muted mt-1 max-w-md">
-              {finalScore >= 80
+              {finalScore === -1 
+                ? 'Academic integrity policies enforced.' 
+                : finalScore >= 80
                 ? `Grade: A+ (Outstanding). You demonstrated skill mastery in ${skill}!`
                 : finalScore >= 60
                 ? `Grade: A (Good). Solid comprehension in ${skill}.`

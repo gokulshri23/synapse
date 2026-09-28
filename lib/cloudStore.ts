@@ -57,6 +57,8 @@ export interface CloudPeer {
   offers: string[];
   needs: string[];
   onboarding_complete?: boolean;
+  verified_level?: number | null;
+  verified?: boolean;
 }
 
 export interface CloudMessage {
@@ -66,6 +68,55 @@ export interface CloudMessage {
   senderName: string;
   senderRole: 'peer' | 'me';
   text: string;
+  timestamp: string;
+  // Part D + H enhancements
+  type?: 'text' | 'voice' | 'ai_rephrase' | 'ai_fallback' | 'system';
+  voiceDataUrl?: string;
+  reactions?: string[];
+  flagged?: boolean;
+  replyToId?: string;
+}
+
+// Part A — Skill verification replaces self-declared levels
+export interface CloudSkillDeclaration {
+  id: string;
+  user_id: string;
+  skill: string;
+  intent: 'teach' | 'learn';
+  status: 'pending' | 'verified' | 'rejected';
+  verified_level: number;
+  quiz_score: number;
+  attempt_count: number;
+  evidence_url: string | null;
+  last_attempt_at: string;
+  created_at: string;
+  // Part C — Python subtopic tracking
+  subtopic_scores?: Record<string, number>;
+}
+
+// Part B — Match health tracking per session
+export interface CloudMatchHealth {
+  id: string;
+  match_id: string;
+  learner_id: string;
+  teacher_id: string;
+  skill: string;
+  session_number: number;
+  pre_score: number;
+  post_score: number;
+  delta: number;
+  autonomous_action: string | null;
+  action_reason: string | null;
+  created_at: string;
+}
+
+// Part E — Network gap logging
+export interface CloudNetworkGap {
+  id: string;
+  skill: string;
+  learner_ids: string[];
+  resolved: boolean;
+  resolution: string | null;
   timestamp: string;
 }
 
@@ -125,6 +176,10 @@ interface CloudStoreData {
   challenges: Record<string, CloudChallenge>;
   ratings: CloudRating[];
   daily_missions: Record<string, CloudDailyMission[]>;
+  // Finals upgrade additions
+  skill_declarations: Record<string, CloudSkillDeclaration[]>;
+  match_health: CloudMatchHealth[];
+  network_gaps: CloudNetworkGap[];
 }
 
 // Global in-memory cache to maintain state across hot lambda invocations
@@ -156,6 +211,9 @@ function loadStore(): CloudStoreData {
         challenges: parsed.challenges || {},
         ratings: Array.isArray(parsed.ratings) ? parsed.ratings : [],
         daily_missions: parsed.daily_missions || {},
+        skill_declarations: parsed.skill_declarations || {},
+        match_health: Array.isArray(parsed.match_health) ? parsed.match_health : [],
+        network_gaps: Array.isArray(parsed.network_gaps) ? parsed.network_gaps : [],
       };
       return global.__synapse_cloud_cache;
     }
@@ -182,6 +240,9 @@ function loadStore(): CloudStoreData {
     challenges: {},
     ratings: [],
     daily_missions: {},
+    skill_declarations: {},
+    match_health: [],
+    network_gaps: [],
   };
 
   global.__synapse_cloud_cache = initial;
@@ -315,7 +376,15 @@ export function getActivePeers(excludeEmail?: string): CloudPeer[] {
   return Object.values(store.peers)
     .filter((p) => p.onboarding_complete !== false) // Strictly filter out incomplete onboarding
     .filter((p) => now - p.lastSeen < 24 * 60 * 60 * 1000)
-    .filter((p) => !normExclude || p.email.toLowerCase() !== normExclude);
+    .filter((p) => !normExclude || p.email.toLowerCase() !== normExclude)
+    .map((p) => {
+      const vLevel = getVerifiedLevel(p.email, p.domain);
+      return {
+        ...p,
+        verified_level: vLevel,
+        verified: vLevel !== null && vLevel > 0,
+      };
+    });
 }
 
 export function updatePeerHeartbeat(peer: Partial<CloudPeer> & { email: string; name: string }): CloudPeer {
@@ -609,3 +678,307 @@ export function getCompletedDailyMissions(userId: string): CloudDailyMission[] {
   const norm = userId.trim().toLowerCase();
   return (store.daily_missions[norm] || []).filter((m) => m.completedAt !== null);
 }
+
+// =========================================================================
+//  PART A — Skill Declarations (replaces self-declared levels)
+// =========================================================================
+
+export function createSkillDeclaration(
+  userId: string,
+  skill: string,
+  intent: 'teach' | 'learn'
+): CloudSkillDeclaration {
+  const store = loadStore();
+  const norm = userId.trim().toLowerCase();
+  if (!store.skill_declarations[norm]) {
+    store.skill_declarations[norm] = [];
+  }
+
+  // Check if a declaration already exists for this skill+intent
+  const existing = store.skill_declarations[norm].find(
+    (d) => d.skill.toLowerCase() === skill.toLowerCase() && d.intent === intent
+  );
+  if (existing && existing.status !== 'rejected') {
+    return existing;
+  }
+
+  const decl: CloudSkillDeclaration = {
+    id: 'sd_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+    user_id: norm,
+    skill,
+    intent,
+    status: 'pending',
+    verified_level: 0,
+    quiz_score: 0,
+    attempt_count: 0,
+    evidence_url: null,
+    last_attempt_at: '',
+    created_at: new Date().toISOString(),
+  };
+
+  store.skill_declarations[norm].push(decl);
+  saveStore(store);
+  return decl;
+}
+
+export function updateSkillDeclaration(
+  declarationId: string,
+  updates: Partial<CloudSkillDeclaration>
+): CloudSkillDeclaration | null {
+  const store = loadStore();
+  for (const userId in store.skill_declarations) {
+    const decls = store.skill_declarations[userId];
+    const idx = decls.findIndex((d) => d.id === declarationId);
+    if (idx !== -1) {
+      decls[idx] = { ...decls[idx], ...updates };
+      saveStore(store);
+      return decls[idx];
+    }
+  }
+  return null;
+}
+
+export function getSkillDeclarations(userId: string): CloudSkillDeclaration[] {
+  const store = loadStore();
+  const norm = userId.trim().toLowerCase();
+  return store.skill_declarations[norm] || [];
+}
+
+export function getVerifiedLevel(userId: string, skill: string): number | null {
+  const store = loadStore();
+  const norm = userId.trim().toLowerCase();
+  const decls = store.skill_declarations[norm] || [];
+  const verified = decls.find(
+    (d) =>
+      d.skill.toLowerCase() === skill.toLowerCase() &&
+      d.status === 'verified'
+  );
+  return verified ? verified.verified_level : null;
+}
+
+export function canRetakeQuiz(userId: string, skill: string): { allowed: boolean; hoursRemaining: number } {
+  const store = loadStore();
+  const norm = userId.trim().toLowerCase();
+  const decls = store.skill_declarations[norm] || [];
+  const latest = decls
+    .filter((d) => d.skill.toLowerCase() === skill.toLowerCase() && d.last_attempt_at)
+    .sort((a, b) => new Date(b.last_attempt_at).getTime() - new Date(a.last_attempt_at).getTime())[0];
+
+  if (!latest || !latest.last_attempt_at) {
+    return { allowed: true, hoursRemaining: 0 };
+  }
+
+  const elapsed = Date.now() - new Date(latest.last_attempt_at).getTime();
+  const cooldownMs = 24 * 60 * 60 * 1000; // 24 hours
+  if (elapsed >= cooldownMs) {
+    return { allowed: true, hoursRemaining: 0 };
+  }
+
+  const remaining = Math.ceil((cooldownMs - elapsed) / (60 * 60 * 1000));
+  return { allowed: false, hoursRemaining: remaining };
+}
+
+// =========================================================================
+//  PART B — Match Health Score + Autonomous Adaptation
+// =========================================================================
+
+export function recordMatchHealth(data: {
+  match_id: string;
+  learner_id: string;
+  teacher_id: string;
+  skill: string;
+  session_number: number;
+  pre_score: number;
+  post_score: number;
+  autonomous_action?: string;
+  action_reason?: string;
+}): CloudMatchHealth {
+  const store = loadStore();
+  const record: CloudMatchHealth = {
+    id: 'mh_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+    match_id: data.match_id,
+    learner_id: data.learner_id.trim().toLowerCase(),
+    teacher_id: data.teacher_id.trim().toLowerCase(),
+    skill: data.skill,
+    session_number: data.session_number,
+    pre_score: data.pre_score,
+    post_score: data.post_score,
+    delta: data.post_score - data.pre_score,
+    autonomous_action: data.autonomous_action || null,
+    action_reason: data.action_reason || null,
+    created_at: new Date().toISOString(),
+  };
+
+  store.match_health.push(record);
+  // Keep max 500 records
+  if (store.match_health.length > 500) {
+    store.match_health = store.match_health.slice(-500);
+  }
+  saveStore(store);
+  return record;
+}
+
+export function getMatchHealthHistory(matchId: string): CloudMatchHealth[] {
+  const store = loadStore();
+  return store.match_health.filter((h) => h.match_id === matchId);
+}
+
+export function getMatchHealthTrend(
+  learnerId: string,
+  skill: string
+): CloudMatchHealth[] {
+  const store = loadStore();
+  const norm = learnerId.trim().toLowerCase();
+  return store.match_health
+    .filter(
+      (h) =>
+        h.learner_id === norm &&
+        h.skill.toLowerCase() === skill.toLowerCase()
+    )
+    .sort((a, b) => a.session_number - b.session_number)
+    .slice(-5);
+}
+
+export function getTeacherCrossLearnerPattern(
+  teacherId: string
+): { avgDelta: number; learnerCount: number; declining: boolean } {
+  const store = loadStore();
+  const norm = teacherId.trim().toLowerCase();
+  const records = store.match_health.filter((h) => h.teacher_id === norm);
+
+  if (records.length === 0) {
+    return { avgDelta: 0, learnerCount: 0, declining: false };
+  }
+
+  const uniqueLearners = new Set(records.map((r) => r.learner_id));
+  const avgDelta =
+    records.reduce((sum, r) => sum + r.delta, 0) / records.length;
+
+  // Only flag declining if pattern spans 3+ different learners
+  const declining = avgDelta < 0 && uniqueLearners.size >= 3;
+
+  return {
+    avgDelta: Math.round(avgDelta * 100) / 100,
+    learnerCount: uniqueLearners.size,
+    declining,
+  };
+}
+
+// =========================================================================
+//  PART E — Network Gap Logging
+// =========================================================================
+
+export function logNetworkGap(
+  skill: string,
+  learnerIds: string[]
+): CloudNetworkGap {
+  const store = loadStore();
+  const gap: CloudNetworkGap = {
+    id: 'ng_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+    skill,
+    learner_ids: learnerIds.map((id) => id.trim().toLowerCase()),
+    resolved: false,
+    resolution: null,
+    timestamp: new Date().toISOString(),
+  };
+
+  store.network_gaps.push(gap);
+  if (store.network_gaps.length > 200) {
+    store.network_gaps = store.network_gaps.slice(-200);
+  }
+  saveStore(store);
+  return gap;
+}
+
+export function resolveNetworkGap(gapId: string, resolution: string): void {
+  const store = loadStore();
+  const gap = store.network_gaps.find((g) => g.id === gapId);
+  if (gap) {
+    gap.resolved = true;
+    gap.resolution = resolution;
+    saveStore(store);
+  }
+}
+
+// =========================================================================
+//  PART D — Message Reactions & Enhanced Messages
+// =========================================================================
+
+export function addMessageReaction(
+  messageId: string,
+  reaction: string
+): CloudMessage | null {
+  const store = loadStore();
+  const msg = store.messages.find((m) => m.id === messageId);
+  if (!msg) return null;
+
+  if (!msg.reactions) msg.reactions = [];
+  if (!msg.reactions.includes(reaction)) {
+    msg.reactions.push(reaction);
+  }
+  saveStore(store);
+  return msg;
+}
+
+export function flagMessageLost(messageId: string): CloudMessage | null {
+  const store = loadStore();
+  const msg = store.messages.find((m) => m.id === messageId);
+  if (!msg) return null;
+  msg.flagged = true;
+  if (!msg.reactions) msg.reactions = [];
+  if (!msg.reactions.includes('lost')) msg.reactions.push('lost');
+  saveStore(store);
+  return msg;
+}
+
+export function addEnhancedMessage(msg: {
+  sessionId?: string;
+  senderId: string;
+  senderName: string;
+  senderRole?: 'peer' | 'me';
+  text: string;
+  type?: 'text' | 'voice' | 'ai_rephrase' | 'ai_fallback' | 'system';
+  voiceDataUrl?: string;
+  replyToId?: string;
+}): CloudMessage {
+  const store = loadStore();
+  const newMsg: CloudMessage = {
+    id: 'msg_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+    sessionId: msg.sessionId || 'global_collab',
+    senderId: msg.senderId,
+    senderName: msg.senderName,
+    senderRole: msg.senderRole || 'peer',
+    text: msg.text,
+    timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    type: msg.type || 'text',
+    voiceDataUrl: msg.voiceDataUrl,
+    reactions: [],
+    flagged: false,
+    replyToId: msg.replyToId,
+  };
+
+  store.messages.push(newMsg);
+  if (store.messages.length > 500) {
+    store.messages = store.messages.slice(-500);
+  }
+  saveStore(store);
+  return newMsg;
+}
+
+export function getSessionLostFlags(sessionId: string): { senderId: string; count: number }[] {
+  const store = loadStore();
+  const sessionMsgs = store.messages.filter(
+    (m) => (m.sessionId === sessionId || m.sessionId === 'global_collab') && m.flagged
+  );
+
+  const flagCounts: Record<string, number> = {};
+  for (const msg of sessionMsgs) {
+    flagCounts[msg.senderId] = (flagCounts[msg.senderId] || 0) + 1;
+  }
+
+  return Object.entries(flagCounts).map(([senderId, count]) => ({
+    senderId,
+    count,
+  }));
+}
+

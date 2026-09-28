@@ -48,6 +48,60 @@ export default function SettingsPage() {
     } catch (e) {}
   }, []);
 
+  const [skillDeclarations, setSkillDeclarations] = useState<any[]>([]);
+  const [newSkillName, setNewSkillName] = useState('');
+  const [newSkillIntent, setNewSkillIntent] = useState('teach');
+  const [isAddingSkill, setIsAddingSkill] = useState(false);
+  const [cooldownRemaining, setCooldownRemaining] = useState<number | null>(null);
+
+  const fetchSkillDeclarations = async () => {
+    if (!email) return;
+    try {
+      const res = await fetch(`/api/skill-declarations?userId=${email}`);
+      if (res.ok) {
+        const data = await res.json();
+        setSkillDeclarations(data.declarations || []);
+      }
+      
+      const cdRes = await fetch(`/api/assess/check-cooldown?userId=${email}`);
+      if (cdRes.ok) {
+        const cdData = await cdRes.json();
+        setCooldownRemaining(cdData.blocked ? cdData.remainingHours : null);
+      }
+    } catch (e) {}
+  };
+
+  useEffect(() => {
+    if (email) fetchSkillDeclarations();
+  }, [email]);
+
+  const handleAddSkill = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newSkillName.trim() || !email) return;
+    try {
+      const res = await fetch('/api/skill-declarations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'create',
+          userId: email,
+          skillName: newSkillName.trim(),
+          intent: newSkillIntent
+        })
+      });
+      if (res.ok) {
+        setNewSkillName('');
+        setIsAddingSkill(false);
+        showToast('Skill added successfully.');
+        fetchSkillDeclarations();
+      } else {
+        showToast('Failed to add skill.');
+      }
+    } catch (e) {
+      showToast('Error adding skill.');
+    }
+  };
+
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 3500);
@@ -331,6 +385,96 @@ export default function SettingsPage() {
             </select>
           </div>
         </div>
+      </div>
+
+      {/* Verified Skills Section */}
+      <div className="bg-card border border-border rounded-[22px] p-6 shadow-xs space-y-4">
+        <div className="flex justify-between items-start">
+          <div>
+            <h2 className="text-lg font-serif font-bold text-ink mb-1">Verified Skills</h2>
+            <p className="text-xs text-muted mb-4">Manage the skills you want to teach or learn.</p>
+          </div>
+          {cooldownRemaining !== null && (
+            <span className="px-3 py-1 bg-amber/10 text-amber border border-amber/25 rounded-full text-xs font-bold">
+              Cooldown: {Math.ceil(cooldownRemaining)}h
+            </span>
+          )}
+        </div>
+
+        <div className="space-y-3">
+          {skillDeclarations.map((skill, idx) => (
+            <div key={idx} className="flex items-center justify-between p-3.5 bg-card-alt rounded-xl border border-border">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-bold text-ink">{skill.skillName}</span>
+                  {skill.status === 'verified' && <span className="text-ok text-xs font-bold">✓</span>}
+                  {skill.status === 'pending' && <span className="text-amber text-xs font-bold">⏱</span>}
+                  {skill.status === 'rejected' && <span className="text-bad text-xs font-bold">✗</span>}
+                </div>
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="text-[11px] text-muted flex items-center gap-1">
+                    {skill.intent === 'teach' ? '📖 Teach' : '🎯 Learn'}
+                  </span>
+                  {skill.verifiedLevel && (
+                    <span className="text-[11px] text-amber font-bold flex items-center">
+                      Lvl {skill.verifiedLevel} {'★'.repeat(skill.verifiedLevel)}
+                    </span>
+                  )}
+                  {skill.quizScore !== undefined && skill.quizScore !== null && (
+                    <span className="text-[11px] text-muted">
+                      Score: {skill.quizScore}%
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {!isAddingSkill ? (
+          <button
+            type="button"
+            onClick={() => setIsAddingSkill(true)}
+            className="w-full py-3 bg-card-alt hover:bg-border/30 border border-dashed border-border text-ink font-semibold rounded-xl text-xs transition-colors cursor-pointer"
+          >
+            + Add New Skill
+          </button>
+        ) : (
+          <form onSubmit={handleAddSkill} className="p-4 bg-card-alt rounded-xl border border-border space-y-3">
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold uppercase tracking-wider text-muted">Skill Name</label>
+              <input
+                type="text"
+                value={newSkillName}
+                onChange={(e) => setNewSkillName(e.target.value)}
+                placeholder="e.g. React, Python"
+                required
+                className="w-full p-2.5 rounded-lg bg-card border border-border text-ink text-sm outline-none focus:border-amber focus:ring-1 focus:ring-amber/20"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold uppercase tracking-wider text-muted">Intent</label>
+              <div className="flex gap-4">
+                <label className="flex items-center gap-2 text-sm text-ink cursor-pointer">
+                  <input type="radio" value="teach" checked={newSkillIntent === 'teach'} onChange={(e) => setNewSkillIntent(e.target.value)} className="text-amber accent-amber" />
+                  📖 Teach
+                </label>
+                <label className="flex items-center gap-2 text-sm text-ink cursor-pointer">
+                  <input type="radio" value="learn" checked={newSkillIntent === 'learn'} onChange={(e) => setNewSkillIntent(e.target.value)} className="text-amber accent-amber" />
+                  🎯 Learn
+                </label>
+              </div>
+            </div>
+            <div className="flex gap-2 pt-2">
+              <button type="submit" className="py-2 px-4 bg-amber hover:bg-terracotta text-white rounded-lg text-xs font-bold transition-colors cursor-pointer">
+                Save
+              </button>
+              <button type="button" onClick={() => setIsAddingSkill(false)} className="py-2 px-4 bg-card hover:bg-border text-ink rounded-lg text-xs font-bold transition-colors cursor-pointer border border-border">
+                Cancel
+              </button>
+            </div>
+          </form>
+        )}
       </div>
 
       {/* Card 6: Account & Logout */}

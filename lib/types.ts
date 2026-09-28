@@ -141,3 +141,87 @@ export interface AdaptationAction {
   description: string;
   timestamp: string;
 }
+
+// =========================================================================
+//  Finals Upgrade — New Types
+// =========================================================================
+
+export interface SkillDeclaration {
+  id: string;
+  user_id: string;
+  skill: string;
+  intent: 'teach' | 'learn';
+  status: 'pending' | 'verified' | 'rejected';
+  verified_level: number;
+  quiz_score: number;
+  attempt_count: number;
+  evidence_url: string | null;
+  last_attempt_at: string;
+  created_at: string;
+  subtopic_scores?: Record<string, number>;
+}
+
+export interface MatchHealth {
+  id: string;
+  match_id: string;
+  learner_id: string;
+  teacher_id: string;
+  skill: string;
+  session_number: number;
+  pre_score: number;
+  post_score: number;
+  delta: number;
+  autonomous_action: string | null;
+  action_reason: string | null;
+  created_at: string;
+}
+
+export interface NetworkGap {
+  id: string;
+  skill: string;
+  learner_ids: string[];
+  resolved: boolean;
+  resolution: string | null;
+  timestamp: string;
+}
+
+export interface EnhancedMessage {
+  id: string;
+  sessionId: string;
+  senderId: string;
+  senderName: string;
+  senderRole: 'peer' | 'me';
+  text: string;
+  timestamp: string;
+  type: 'text' | 'voice' | 'ai_rephrase' | 'ai_fallback' | 'system';
+  voiceDataUrl?: string;
+  reactions?: string[];
+  flagged?: boolean;
+  replyToId?: string;
+}
+
+export interface TeachingChallengeResult {
+  accuracy: number;
+  clarity: number;
+  beginnerFriendliness: number;
+  average: number;
+  feedback: string;
+  passed: boolean;
+  assignedLevel: number;
+}
+
+export interface MatchHealthTrend {
+  sessions: MatchHealth[];
+  trend: 'improving' | 'flat' | 'declining';
+  avgDelta: number;
+  recommendedAction: string | null;
+}
+
+export const PYTHON_TEACHING_SUBTOPICS = [
+  { id: 'py-vars', name: 'Variables & Data Types', weight: 0.15 },
+  { id: 'py-funcs', name: 'Functions & Scopes', weight: 0.20 },
+  { id: 'py-oop', name: 'Object-Oriented Programming', weight: 0.20 },
+  { id: 'py-files', name: 'File Handling & I/O', weight: 0.15 },
+  { id: 'py-numpy', name: 'NumPy', weight: 0.15 },
+  { id: 'py-pandas', name: 'Pandas', weight: 0.15 },
+] as const;

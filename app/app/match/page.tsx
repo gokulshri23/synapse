@@ -202,6 +202,8 @@ export default function MatchPage() {
               offers: p.offers || [p.domain, 'Problem Solving'],
               needs: p.needs || ['Architecture', 'Optimization'],
               onboarding_complete: p.onboarding_complete !== false,
+              verified_level: p.verified_level,
+              verified: p.verified,
             });
           });
         }
@@ -257,12 +259,27 @@ export default function MatchPage() {
     const activeOffers = customOffers && customOffers.length > 0 ? customOffers : canTeach;
     const activeNeeds = customNeeds && customNeeds.length > 0 ? customNeeds : seekingGuidance;
 
+    let userVerifiedLevel: number | null = null;
+    try {
+      const saved = localStorage.getItem('synapse_study_data');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed.declarations)) {
+          const dec = parsed.declarations.find(
+            (d: any) => d.skill?.toLowerCase() === currentDomain.toLowerCase() && d.status === 'verified'
+          );
+          if (dec && dec.verified_level) userVerifiedLevel = dec.verified_level;
+        }
+      }
+    } catch (e) {}
+
     const currentUserObj = {
       id: currentEmail || 'current_user',
       name: currentName,
       email: currentEmail,
       domain: currentDomain,
       level: lvl,
+      verified_level: userVerifiedLevel,
       offers: activeOffers.length > 0 ? activeOffers : [currentDomain, 'Problem Solving'],
       needs: activeNeeds.length > 0 ? activeNeeds : [currentDomain === 'React' ? 'Python' : 'React', 'Algorithms'],
     };
@@ -1058,6 +1075,15 @@ export default function MatchPage() {
                                     >
                                       {match.peerRole}
                                     </span>
+                                      {(match as any).verified ? (
+                                        <span className="text-[9px] px-1.5 py-0.5 rounded font-bold border border-ok/30 bg-ok/10 text-ok">
+                                          ✅ Verified
+                                        </span>
+                                      ) : (
+                                        <span className="text-[9px] px-1.5 py-0.5 rounded font-bold border border-muted/30 bg-card-alt text-muted">
+                                          ⚠️ Unverified
+                                        </span>
+                                      )}
                                   </div>
                                   <p className="text-[11px] text-muted line-clamp-1">{match.primarySkill} Specialist</p>
                                 </div>

@@ -10,7 +10,21 @@ const ai = new GoogleGenAI({ apiKey });
 
 export async function POST(req: Request) {
   try {
-    const { message, history, userCode, track, peerName } = await req.json();
+    const body = await req.json();
+
+    if (body.mode === 'rephrase') {
+      const prompt = `You are a helpful teaching assistant. Rephrase the following explanation in simpler terms that a complete beginner would understand. Use an analogy if helpful. Keep it concise (2-3 sentences max).\n\nOriginal: ${body.originalMessage}`;
+      const response = await ai.models.generateContent({ model: 'gemini-2.0-flash', contents: prompt });
+      return NextResponse.json({ reply: response.text, mode: 'rephrase' });
+    }
+
+    if (body.mode === 'fallback') {
+      const prompt = `You are an expert tutor. Both learners are stuck on this topic: ${body.topic}. Here is their recent conversation: ${JSON.stringify(body.recentMessages)}. Provide a clear, comprehensive explanation that addresses their confusion. Use simple language, step-by-step breakdown, and practical examples. Keep it under 300 words.`;
+      const response = await ai.models.generateContent({ model: 'gemini-2.0-flash', contents: prompt });
+      return NextResponse.json({ reply: response.text, mode: 'fallback' });
+    }
+
+    const { message, history, userCode, track, peerName } = body;
 
     if (!message || typeof message !== 'string') {
       return NextResponse.json({ reply: 'Hey! Ready when you are. What part of the challenge are you working on?' });

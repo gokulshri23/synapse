@@ -76,6 +76,7 @@ export interface PeerMatchResult {
   plainExplanation: string;
   canTeach: string[];
   wantsToLearn: string[];
+  verified?: boolean;
 }
 
 export interface AgentActivityLog {
@@ -315,6 +316,7 @@ export function runPeerMatchingAgent(
     targetLevel?: any;
     offers?: string[];
     needs?: string[];
+    verified_level?: number | null;
   },
   availablePeers: Array<{
     id: string;
@@ -327,20 +329,32 @@ export function runPeerMatchingAgent(
     offers?: string[];
     needs?: string[];
     onboarding_complete?: boolean;
+    verified_level?: number | null;
+    verified?: boolean;
   }>
 ): AgentMatchResponse {
   const logs: AgentActivityLog[] = [];
 
   // Step 1 & 2: OBSERVE & UNDERSTAND
-  const userCurrentLevel = parseProficiency(currentUser.level);
-  const userTargetLevel = currentUser.targetLevel !== undefined ? parseProficiency(currentUser.targetLevel) : Math.min(5, userCurrentLevel + 2) as NumericProficiency;
   const userDomain = normalizeSkillName(currentUser.domain);
+  const userVerifiedLevelRaw = currentUser.verified_level != null ? currentUser.verified_level : null;
+  const userCurrentLevel = userVerifiedLevelRaw != null 
+    ? (userVerifiedLevelRaw as NumericProficiency) 
+    : parseProficiency(currentUser.level);
+  
+  const userTargetLevel = currentUser.targetLevel !== undefined ? parseProficiency(currentUser.targetLevel) : Math.min(5, userCurrentLevel + 2) as NumericProficiency;
+  
   const userNeeds = (currentUser.needs && currentUser.needs.length > 0 ? currentUser.needs : [userDomain]).map(normalizeSkillName);
   const userOffers = (currentUser.offers && currentUser.offers.length > 0 ? currentUser.offers : [userDomain]).map(normalizeSkillName);
 
   logs.push(
     createLog('OBSERVE', `Scanning profile for ${currentUser.name || 'User'}: target domain "${userDomain}" at level ${userCurrentLevel} (${PROFICIENCY_LABELS[userCurrentLevel]})`)
   );
+  if (userVerifiedLevelRaw != null) {
+    logs.push(createLog('OBSERVE', `Using verified level ${userVerifiedLevelRaw} (Teaching Verified)`));
+  } else {
+    logs.push(createLog('OBSERVE', `Using self-declared level (unverified)`));
+  }
   logs.push(
     createLog('UNDERSTAND', `Normalizing skill taxonomy: Needs [${userNeeds.join(', ')}], Can Offer [${userOffers.join(', ')}]`)
   );
@@ -374,7 +388,14 @@ export function runPeerMatchingAgent(
   const matches: PeerMatchResult[] = [];
 
   for (const peer of validPeers) {
-    const peerLevel = parseProficiency(peer.numeric_level ?? peer.level);
+    const peerVerifiedLevelRaw = peer.verified_level != null 
+      ? peer.verified_level 
+      : (peer.verified ? (peer.numeric_level ?? peer.level) : null);
+    const peerLevel = peerVerifiedLevelRaw != null
+      ? (peerVerifiedLevelRaw as NumericProficiency)
+      : parseProficiency(peer.numeric_level ?? peer.level);
+    const isPeerVerified = Boolean(peer.verified || peerVerifiedLevelRaw != null);
+
     const peerOffers = (peer.offers || [peer.domain]).map(normalizeSkillName);
     const peerNeeds = (peer.needs || []).map(normalizeSkillName);
     const peerRole = classifyRoleForSkill(peerLevel, Math.min(5, peerLevel + 1) as NumericProficiency);
@@ -411,12 +432,14 @@ export function runPeerMatchingAgent(
 
     // Step 12: Plain-language decision explanation
     let explanation = '';
+    const verifiedText = isPeerVerified ? (peerLevel >= 3 ? 'Verified Teacher' : 'Verified Peer Helper') : PROFICIENCY_LABELS[peerLevel];
+    
     if (canUserTeachPeer) {
-      explanation = `Matched with ${peer.name} because they are ${PROFICIENCY_LABELS[peerLevel]} (Level ${peerLevel}) in ${peerOffers[0] || userDomain} and can guide your growth, while you offer ${userOffers[0]} which they need. Perfect 2-way reciprocal match!`;
+      explanation = `Matched with ${peer.name} because they are ${verifiedText} (Level ${peerLevel}) in ${peerOffers[0] || userDomain} and can guide your growth, while you offer ${userOffers[0]} which they need. Perfect 2-way reciprocal match!`;
     } else if (peerLevel === 2 && userCurrentLevel <= 1) {
-      explanation = `Matched with ${peer.name} as a certified Peer Helper (Level 2) in ${peerOffers[0] || userDomain}. They will assist you in mastering foundational concepts smoothly.`;
+      explanation = `Matched with ${peer.name} as a ${isPeerVerified ? 'Verified Peer Helper' : 'certified Peer Helper'} (Level 2) in ${peerOffers[0] || userDomain}. They will assist you in mastering foundational concepts smoothly.`;
     } else {
-      explanation = `Matched with ${peer.name} because they are ${PROFICIENCY_LABELS[peerLevel]} (Level ${peerLevel}) in ${peerOffers[0] || userDomain}, providing optimal Zone of Proximal Development coaching.`;
+      explanation = `Matched with ${peer.name} because they are ${verifiedText} (Level ${peerLevel}) in ${peerOffers[0] || userDomain}, providing optimal Zone of Proximal Development coaching.`;
     }
 
     matches.push({
@@ -432,6 +455,7 @@ export function runPeerMatchingAgent(
       plainExplanation: explanation,
       canTeach: peerOffers,
       wantsToLearn: peerNeeds,
+      verified: isPeerVerified,
     });
   }
 
