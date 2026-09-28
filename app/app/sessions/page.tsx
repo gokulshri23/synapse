@@ -7,19 +7,17 @@ import NativeCallView from '@/components/call/NativeCallView';
 import { createClient } from '@/lib/supabase/client';
 import SessionSummaryCard from '@/components/adaptive/SessionSummaryCard';
 import WhyThisModal from '@/components/adaptive/WhyThisModal';
+import ChatWindow, { ChatMessage } from '@/components/chat/ChatWindow';
 
 // ─── Types ────────────────────────────────────────────────────
-interface ChatMessage {
-  id: string;
-  text: string;
-  sender: 'me' | 'peer';
-  time: string;
-  senderName?: string;
-  type?: 'text' | 'voice' | 'ai_rephrase' | 'ai_fallback' | 'system' | 'study_assistant';
-  voiceDataUrl?: string;
-  reactions?: string[];
-  flagged?: boolean;
-  status?: 'sending' | 'sent' | 'failed';
+export interface FriendItem {
+  connectionId: string;
+  threadId: string;
+  friendEmail: string;
+  friendName: string;
+  skillArea: string;
+  initials: string;
+  isReal: boolean;
 }
 
 interface ChallengeRubric {
@@ -97,12 +95,16 @@ export default function SessionsPage() {
   });
 
   // Active peer
+  const [acceptedFriends, setAcceptedFriends] = useState<FriendItem[]>([]);
+  const [currentCallId, setCurrentCallId] = useState<string | null>(null);
+
   const [activePeer, setActivePeer] = useState<{
     id: string;
     name: string;
     initials: string;
     skill: string;
     isReal?: boolean;
+    connectionId?: string;
   }>(() => {
     if (typeof window !== 'undefined') {
       try {
@@ -115,6 +117,7 @@ export default function SessionsPage() {
             initials: p.name ? p.name.split(' ').map((n: string) => n[0]).join('').slice(0, 2) : 'PP',
             skill: p.domain || p.offers?.[0] || 'Peer Learning',
             isReal: Boolean(p.isReal),
+            connectionId: p.connectionId,
           };
         }
       } catch (e) {}
@@ -240,6 +243,8 @@ function useAsync(asyncFn) {
     callMode: 'voice' | 'video';
     callSessionId?: string;
     messageId: string;
+    callId?: string;
+    connectionId?: string;
   } | null>(null);
   const dismissedCallIdsRef = useRef<Set<string>>(new Set());
 
@@ -377,17 +382,61 @@ function useAsync(asyncFn) {
       }
     } catch (e) {}
 
-    // Check connection status
-    if (currentEmail && peerId && !peerId.includes('demo') && !peerId.includes('maya')) {
+    // Check connection status and load all accepted friends
+    if (currentEmail) {
       fetch('/api/connections?userId=' + encodeURIComponent(currentEmail))
         .then((res) => res.json())
         .then((data) => {
-          const normPeer = peerId.trim().toLowerCase();
+          const normMe = currentEmail.trim().toLowerCase();
           const activeList = Array.isArray(data.active) ? data.active : [];
-          const isAccepted = activeList.some((c: any) => c.requesterId === normPeer || c.recipientId === normPeer);
-          const outgoingList = Array.isArray(data.pendingOutgoing) ? data.pendingOutgoing : [];
-          const isPending = outgoingList.some((c: any) => c.recipientId === normPeer);
-          setIsConnectionAccepted(isPending && !isAccepted ? false : true);
+          const friends: FriendItem[] = activeList.map((c: any) => {
+            const reqNorm = (c.requesterId || '').toLowerCase().trim();
+            const isReq = reqNorm === normMe;
+            const fEmail = isReq ? c.recipientId : c.requesterId;
+            const fName = isReq ? c.recipientName : c.requesterName;
+            return {
+              connectionId: c.id,
+              threadId: c.id,
+              friendEmail: fEmail,
+              friendName: fName || 'Friend',
+              skillArea: c.skillArea || 'General',
+              initials: (fName || 'FP')
+                .split(' ')
+                .map((n: string) => n[0])
+                .join('')
+                .slice(0, 2)
+                .toUpperCase(),
+              isReal: true,
+            };
+          });
+          setAcceptedFriends(friends);
+
+          if (friends.length > 0) {
+            const matched = friends.find(
+              (f) =>
+                f.friendEmail.toLowerCase() === peerId.toLowerCase() ||
+                f.connectionId === peerId ||
+                f.friendName.toLowerCase() === peerId.toLowerCase()
+            );
+            const chosen = matched || friends[0];
+            setActivePeer({
+              id: chosen.friendEmail,
+              name: chosen.friendName,
+              initials: chosen.initials,
+              skill: chosen.skillArea || currentTrack + ' Track',
+              isReal: true,
+              connectionId: chosen.connectionId,
+            });
+            setIsConnectionAccepted(true);
+          } else {
+            const normPeer = peerId.trim().toLowerCase();
+            const isAccepted = activeList.some(
+              (c: any) => c.requesterId === normPeer || c.recipientId === normPeer
+            );
+            const outgoingList = Array.isArray(data.pendingOutgoing) ? data.pendingOutgoing : [];
+            const isPending = outgoingList.some((c: any) => c.recipientId === normPeer);
+            setIsConnectionAccepted(isPending && !isAccepted ? false : true);
+          }
         })
         .catch(() => setIsConnectionAccepted(true));
     }
@@ -421,13 +470,38 @@ function useAsync(asyncFn) {
         body: JSON.stringify({ name: currentName, email: currentEmail, domain: currentTrack })
       }).catch(() => {});
     }
-
-    // Message history is loaded via thread-based fetchThreadMessages below
   }, []);
+
+  // ─── Friend Switcher Handler ──────────────────────────────────
+  const handleSelectFriend = (friend: FriendItem) => {
+    setActivePeer({
+      id: friend.friendEmail,
+      name: friend.friendName,
+      initials: friend.initials,
+      skill: friend.skillArea || studentTrack + ' Track',
+      isReal: true,
+      connectionId: friend.connectionId,
+    });
+    setIsConnectionAccepted(true);
+    try {
+      localStorage.setItem(
+        'synapse_active_peer',
+        JSON.stringify({
+          id: friend.friendEmail,
+          name: friend.friendName,
+          domain: friend.skillArea || studentTrack,
+          isReal: true,
+          connectionId: friend.connectionId,
+        })
+      );
+    } catch (e) {}
+  };
 
   // ─── Part H / BUG 5: Thread Messages Persistence & Realtime ───
   const currentThreadId = activeStudyRoom?.room?.id
     ? `room__${activeStudyRoom.room.id}`
+    : activePeer.connectionId
+    ? activePeer.connectionId
     : `pair__${[(studentEmail || studentName || 'learner').trim().toLowerCase(), (activePeer.id || activePeer.name || 'peer').trim().toLowerCase()].sort().join('__')}`;
 
   // Synchronize messages to local storage whenever they change
@@ -563,78 +637,100 @@ function useAsync(asyncFn) {
     };
   }, [currentThreadId, fetchThreadMessages, studentEmail, studentName, activePeer.name, scrollToBottom]);
 
-  // ─── Real-time Signaling & Peer Events Polling ─────────────
+  // ─── Real-time Private Calling & Incoming Ringing ──────────
   useEffect(() => {
     let isSubscribed = true;
 
-    const pollPeerEvents = async () => {
+    const pollCalls = async () => {
+      const myEmailLower = (studentEmail || studentName || '').trim().toLowerCase();
+      if (!myEmailLower) return;
+
       try {
-        const res = await fetch('/api/peer-network?sessionId=global_collab');
+        const res = await fetch(`/api/calls?calleeId=${encodeURIComponent(myEmailLower)}`);
         if (res.ok && isSubscribed) {
           const data = await res.json();
-          if (Array.isArray(data.messages) && data.messages.length > 0) {
-            const myEmailLower = (studentEmail || '').trim().toLowerCase();
-
-            // Detect live incoming call invites from peer
-            const latestInvite = data.messages
-              .slice()
-              .reverse()
-              .find((m: any) => {
-                if (m.type !== 'call_invite' && !m.callUrl) return false;
-                const senderLower = (m.senderId || '').trim().toLowerCase();
-                if (myEmailLower && senderLower === myEmailLower) return false;
-                if (dismissedCallIdsRef.current.has(m.id)) return false;
-                if (m.createdAt && Date.now() - m.createdAt > 120000) return false;
-                return true;
-              });
-
-            if (latestInvite && !isCallModalOpen) {
+          if (Array.isArray(data.calls) && data.calls.length > 0) {
+            const activeCall = data.calls.find(
+              (c: any) => !dismissedCallIdsRef.current.has(c.id) && c.status === 'ringing'
+            );
+            if (activeCall && !isCallModalOpen) {
+              const displayName = encodeURIComponent((studentName || 'Learner').split(' ')[0]);
+              const callUrl = `https://meet.jit.si/${activeCall.room_name}#config.startWithVideoMuted=${activeCall.type === 'voice'}&config.prejoinPageEnabled=false&config.disableDeepLinking=true&userInfo.displayName="${displayName}"`;
               setIncomingCall({
-                callerId: latestInvite.senderId,
-                callerName: latestInvite.senderName || activePeer.name || 'Peer Partner',
-                callUrl: latestInvite.callUrl,
-                callMode: latestInvite.callMode || 'video',
-                callSessionId: latestInvite.callSessionId,
-                messageId: latestInvite.id,
+                callerId: activeCall.caller_id,
+                callerName: activeCall.caller_name || 'Friend',
+                callUrl,
+                callMode: activeCall.type === 'voice' ? 'voice' : 'video',
+                callSessionId: activeCall.room_name,
+                messageId: activeCall.id,
+                callId: activeCall.id,
+                connectionId: activeCall.connection_id,
               });
-            } else if (!latestInvite && incomingCall) {
+            } else if (!activeCall && incomingCall) {
               setIncomingCall(null);
             }
-
-            // If currently in a live call, check if peer broadcasted call_end
-            if (isCallModalOpen) {
-              const callEndEvent = data.messages
-                .slice()
-                .reverse()
-                .find((m: any) => {
-                  if (m.type !== 'call_end') return false;
-                  const senderLower = (m.senderId || '').trim().toLowerCase();
-                  if (myEmailLower && senderLower === myEmailLower) return false;
-                  if (m.createdAt && Date.now() - m.createdAt > 20000) return false;
-                  return true;
-                });
-
-              if (callEndEvent) {
-                setIsCallModalOpen(false);
-                setCallUrl(null);
-                showToast('Call ended by peer partner.');
-              }
-            }
-
-            // Check for peer submitted trigger
-            data.messages.forEach((m: any) => {
-              if (m.text && m.text.includes('submitted the collaborative challenge')) {
-                setPeerSubmitted(true);
-              }
-            });
+          } else if (incomingCall) {
+            setIncomingCall(null);
           }
         }
       } catch (e) {}
     };
 
-    const interval = setInterval(pollPeerEvents, 1500);
-    return () => { isSubscribed = false; clearInterval(interval); };
-  }, [studentEmail, activePeer.name, isCallModalOpen, incomingCall]);
+    pollCalls();
+    const interval = setInterval(pollCalls, 2000);
+
+    const supabase = createClient();
+    const myClean = (studentEmail || studentName || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+    const channel = supabase
+      .channel('calls_' + myClean)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'calls',
+          filter: `callee_id=eq.${(studentEmail || studentName || '').trim().toLowerCase()}`,
+        },
+        (payload: any) => {
+          if (payload.new && payload.new.status === 'ringing' && !isCallModalOpen) {
+            pollCalls();
+          } else if (
+            payload.new &&
+            (payload.new.status === 'ended' || payload.new.status === 'declined' || payload.new.status === 'missed')
+          ) {
+            if (incomingCall?.callId === payload.new.id) {
+              setIncomingCall(null);
+            }
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      isSubscribed = false;
+      clearInterval(interval);
+      supabase.removeChannel(channel);
+    };
+  }, [studentEmail, studentName, isCallModalOpen, incomingCall]);
+
+  // If in an active call, observe call status changes so ending call on one device ends it on both!
+  useEffect(() => {
+    if (!currentCallId || !isCallModalOpen) return;
+    const checkCallStatus = async () => {
+      try {
+        const res = await fetch(`/api/calls?callId=${encodeURIComponent(currentCallId)}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.call && (data.call.status === 'ended' || data.call.status === 'declined')) {
+            showToast('The other peer ended the call.');
+            handleEndCall(0);
+          }
+        }
+      } catch (e) {}
+    };
+    const interval = setInterval(checkCallStatus, 1500);
+    return () => clearInterval(interval);
+  }, [currentCallId, isCallModalOpen]);
 
   // ─── Incoming Call Audio Ring Chime ───────────────────────────
   useEffect(() => {
@@ -1288,6 +1384,7 @@ function useAsync(asyncFn) {
   const handleStartCall = async (mode: 'voice' | 'video') => {
     const myId = (studentEmail || studentName || 'user').trim().toLowerCase();
     const peerId = (activePeer.id || activePeer.name || 'peer').trim().toLowerCase();
+    const connId = activePeer.connectionId || `pair_${[myId, peerId].sort().join('_')}`;
     const deterministicCallSessionId = 'call__' + [myId, peerId].sort().join('__');
     setActiveCallSessionId(deterministicCallSessionId);
     setIsCallInitiator(true);
@@ -1298,20 +1395,37 @@ function useAsync(asyncFn) {
     setIsCallModalOpen(true);
 
     try {
-      const sId = deterministicCallSessionId;
-      const res = await fetch('/api/call-token', {
+      // 1. Post to /api/calls for isolated signaling and database registration
+      const callRes = await fetch('/api/calls', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          userId: studentEmail || studentName,
-          peerEmail: activePeer.id || activePeer.name,
+          connectionId: connId,
+          callerId: myId,
+          callerName: studentName,
+          calleeId: peerId,
+          type: mode,
+        }),
+      });
+      const callData = await callRes.json();
+      if (callData.call) {
+        setCurrentCallId(callData.call.id);
+      }
+
+      // 2. Generate room token / WebRTC URL
+      const tokenRes = await fetch('/api/call-token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: myId,
+          peerEmail: peerId,
           mode,
-          sessionId: sId,
-        })
+          sessionId: deterministicCallSessionId,
+        }),
       });
 
-      const data = await res.json();
-      if (!res.ok || !data.success) {
+      const data = await tokenRes.json();
+      if (!tokenRes.ok || !data.success) {
         showToast(data.error || 'Live calls could not connect. Check network connection.');
         setIsCallModalOpen(false);
         setCallConnecting(false);
@@ -1321,26 +1435,10 @@ function useAsync(asyncFn) {
       setCallUrl(data.callUrl);
       setCallConnecting(false);
 
-      // Broadcast live call invite to the other peer so their device rings
-      fetch('/api/peer-network', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          type: 'call_invite',
-          sessionId: 'global_collab',
-          callSessionId: deterministicCallSessionId,
-          senderId: studentEmail || studentName,
-          senderName: studentName || 'Peer Partner',
-          callUrl: data.callUrl,
-          callMode: mode,
-          text: `📞 Started a live ${mode} call. Click Accept to join!`
-        })
-      }).catch(() => {});
-
-      // 10s connection timeout check
+      // 15s connection timeout check
       const timer = setTimeout(() => {
         setCallTimeout(true);
-      }, 10000);
+      }, 15000);
       return () => clearTimeout(timer);
     } catch (e: any) {
       showToast('Call service error. Please try again.');
@@ -1349,9 +1447,18 @@ function useAsync(asyncFn) {
     }
   };
 
-  const handleEndCall = (durationSec = 0) => {
+  const handleEndCall = async (durationSec = 0) => {
     setIsCallModalOpen(false);
     setCallUrl(null);
+
+    if (currentCallId) {
+      fetch('/api/calls', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ callId: currentCallId, status: 'ended' }),
+      }).catch(() => {});
+      setCurrentCallId(null);
+    }
 
     // Only show post-call quiz if call was attended for at least 1 minute (60s)
     if (typeof durationSec === 'number' && durationSec >= 60) {
@@ -1365,55 +1472,44 @@ function useAsync(asyncFn) {
       setShowPostCallQuiz(false);
       showToast(`Call ended (${durationSec}s). Calls under 1 minute do not require a post-call check.`);
     }
-
-    // Broadcast call end to network
-    fetch('/api/peer-network', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        type: 'call_end',
-        sessionId: 'global_collab',
-        senderId: studentEmail || studentName,
-        senderName: studentName || 'Peer Partner',
-        text: 'Call ended'
-      })
-    }).catch(() => {});
   };
 
-  const handleAcceptIncomingCall = () => {
+  const handleAcceptIncomingCall = async () => {
     if (!incomingCall) return;
+    const callId = incomingCall.callId || incomingCall.messageId;
+
+    await fetch('/api/calls', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ callId, status: 'accepted' }),
+    }).catch(() => {});
+
+    setCurrentCallId(callId);
+
     const callerId = incomingCall.callerId;
     const callerName = incomingCall.callerName;
+    const friend = acceptedFriends.find(
+      (f) =>
+        f.friendEmail.toLowerCase() === callerId.toLowerCase() ||
+        f.connectionId === incomingCall.connectionId
+    );
+    if (friend) {
+      handleSelectFriend(friend);
+    } else {
+      setActivePeer({
+        id: callerId,
+        name: callerName,
+        initials: callerName.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase(),
+        skill: studentTrack + ' Track',
+        isReal: true,
+        connectionId: incomingCall.connectionId,
+      });
+    }
+
     const myId = (studentEmail || studentName || 'user').trim().toLowerCase();
     const deterministicCallSessionId =
       incomingCall.callSessionId ||
       'call__' + [myId, callerId.trim().toLowerCase()].sort().join('__');
-
-    // Synchronize active peer so both participants point to each other
-    setActivePeer({
-      id: callerId,
-      name: callerName,
-      initials: callerName
-        ? callerName
-            .split(' ')
-            .map((n: string) => n[0])
-            .join('')
-            .slice(0, 2)
-        : 'PP',
-      skill: studentTrack + ' Track',
-      isReal: true,
-    });
-    try {
-      localStorage.setItem(
-        'synapse_active_peer',
-        JSON.stringify({
-          id: callerId,
-          name: callerName,
-          domain: studentTrack,
-          isReal: true,
-        })
-      );
-    } catch (e) {}
 
     setActiveCallSessionId(deterministicCallSessionId);
     setIsCallInitiator(false);
@@ -1424,9 +1520,17 @@ function useAsync(asyncFn) {
     showToast(`Connected to live ${incomingCall.callMode} call with ${callerName}!`);
   };
 
-  const handleDeclineIncomingCall = () => {
+  const handleDeclineIncomingCall = async () => {
     if (!incomingCall) return;
+    const callId = incomingCall.callId || incomingCall.messageId;
     dismissedCallIdsRef.current.add(incomingCall.messageId);
+
+    await fetch('/api/calls', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ callId, status: 'declined' }),
+    }).catch(() => {});
+
     setIncomingCall(null);
   };
 
@@ -2005,6 +2109,50 @@ function useAsync(asyncFn) {
         )}
       </div>
 
+      {/* ─── Accepted Friends Selector Tabs ─── */}
+      {acceptedFriends.length > 0 && (
+        <div className="bg-card border border-border rounded-[20px] p-3 px-4 shadow-xs flex items-center justify-between gap-3 overflow-x-auto">
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="text-base">👥</span>
+            <span className="text-xs font-bold font-serif text-ink">My Study Connections:</span>
+          </div>
+          <div className="flex items-center gap-2 overflow-x-auto">
+            {acceptedFriends.map((friend) => {
+              const isSelected =
+                (activePeer.connectionId && activePeer.connectionId === friend.connectionId) ||
+                activePeer.id.toLowerCase() === friend.friendEmail.toLowerCase();
+              return (
+                <button
+                  key={friend.connectionId}
+                  onClick={() => handleSelectFriend(friend)}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-2 border transition-all cursor-pointer ${
+                    isSelected
+                      ? 'bg-amber text-white border-amber shadow-xs'
+                      : 'bg-card-alt text-ink border-border hover:border-amber/50'
+                  }`}
+                >
+                  <div
+                    className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
+                      isSelected ? 'bg-white/20 text-white' : 'bg-amber/15 text-amber'
+                    }`}
+                  >
+                    {friend.initials}
+                  </div>
+                  <span>{friend.friendName}</span>
+                  <span
+                    className={`text-[10px] px-1.5 py-0.2 rounded-md ${
+                      isSelected ? 'bg-white/20 text-white' : 'bg-muted/10 text-muted'
+                    }`}
+                  >
+                    {friend.skillArea}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Session Header with peer info & Live Calling Buttons */}
       <div className="bg-card border border-border rounded-[22px] p-5 shadow-xs flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-3.5">
@@ -2130,241 +2278,37 @@ function useAsync(asyncFn) {
       {/* Main Layout: Chat + Challenge (only when in active phase) */}
       {sessionPhase !== 'pre-quiz' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-          {/* Left Column: Chat */}
-          <div className="lg:col-span-6 bg-card border border-border rounded-[22px] shadow-xs flex flex-col h-[640px] overflow-hidden">
-            {/* Chat Header */}
-            <div className="p-4 border-b border-border bg-card-alt flex items-center justify-between shrink-0">
-              <div className="flex items-center gap-2.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-ok animate-pulse" />
-                <span className="text-xs font-bold text-ink uppercase tracking-wider">
-                  Live Peer Discussion
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-[11px] text-muted font-mono">
-                  {activePeer.isReal ? 'Cross-Device Socket' : 'Gemini AI Co-Pilot'}
-                </span>
-                {preScore !== null && postScore === null && (
-                  <button
-                    onClick={() => {
-                      setPostQuizAnswers(new Array(preQuizQuestions.length).fill(-1));
-                      setSessionPhase('post-quiz');
-                    }}
-                    className="text-[10px] px-2 py-1 bg-amber/10 text-amber font-bold rounded-lg border border-amber/20 hover:bg-amber/20 transition-colors cursor-pointer"
-                  >
-                    End Session {'\u2192'} Post-Quiz
-                  </button>
-                )}
-                {postScore !== null && (
-                  <button
-                    onClick={handleEndSessionAndSummarize}
-                    className="text-[10px] px-2 py-1 bg-blue-500/10 text-blue-600 font-bold rounded-lg border border-blue-500/20 hover:bg-blue-500/20 transition-colors cursor-pointer"
-                  >
-                    AI Summary
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* Study Assistant Status Banner (Section 6 Controls) */}
-            <div className="px-4 py-2 bg-blue-50/60 dark:bg-blue-950/20 border-b border-blue-100 dark:border-blue-900/30 flex items-center justify-between text-[11px] text-blue-700 dark:text-blue-300 shrink-0">
-              <div className="flex items-center gap-2">
-                <span className={`w-1.5 h-1.5 rounded-full ${assistantDisabledForSession ? 'bg-muted' : 'bg-blue-500 animate-ping'}`} />
-                <span className="font-medium">
-                  {assistantDisabledForSession
-                    ? 'AI study assistant switched off for this session'
-                    : Date.now() < assistantSuppressedUntil
-                    ? 'AI study assistant paused (cooldown active)'
-                    : 'AI study assistant is active for this chat'}
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                {assistantDisabledForSession ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setAssistantDisabledForSession(false);
-                      showToast('AI Study Assistant re-enabled.');
-                    }}
-                    className="text-[10px] text-blue-600 hover:underline font-bold cursor-pointer"
-                  >
-                    Turn back on
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setAssistantDisabledForSession(true);
-                      showToast('AI Study Assistant switched off for this session.');
-                    }}
-                    className="text-[10px] text-muted hover:text-ink cursor-pointer"
-                  >
-                    Switch off for session
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* Tier 1 Voice Call Suggestion Bubble (Section 6 Escalation & Controls) */}
-            {tier1VoicePrompt && !assistantDisabledForSession && (
-              <div className="mx-4 mt-3 p-3 bg-amber/10 border border-amber/30 rounded-xl space-y-2 animate-slide-down shrink-0">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xl">📞</span>
-                    <p className="text-xs text-ink">{tier1VoicePrompt}</p>
-                  </div>
-                  <button
-                    onClick={() => {
-                      setTier1VoicePrompt(null);
-                      handleStartCall('voice');
-                    }}
-                    className="text-xs px-3 py-1.5 bg-amber hover:bg-terracotta text-white font-bold rounded-lg shrink-0 cursor-pointer shadow-xs"
-                  >
-                    Start voice call
-                  </button>
-                </div>
-                {/* Student Controls: Not now & Switch off */}
-                <div className="flex items-center justify-end gap-3 pt-1 border-t border-amber/20 text-[11px]">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setAssistantSuppressedUntil(Date.now() + 10 * 60 * 1000);
-                      setTier1VoicePrompt(null);
-                      showToast('AI Study Assistant paused for 10 minutes.');
-                    }}
-                    className="text-muted hover:text-ink font-medium cursor-pointer"
-                  >
-                    Not now (10m)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setAssistantDisabledForSession(true);
-                      setTier1VoicePrompt(null);
-                      showToast('AI Study Assistant switched off for this session.');
-                    }}
-                    className="text-muted hover:text-bad font-medium cursor-pointer"
-                  >
-                    Switch off for session
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* Connection pending banner */}
-            {!isConnectionAccepted && (
-              <div className="p-3 bg-amber/10 border-b border-amber/25 text-xs text-ink flex items-center gap-2 shrink-0">
-                <span className="text-base">{'\u{1F512}'}</span>
-                <span>
-                  <strong>Connection Pending:</strong> Waiting for {activePeer.name} to accept your connection invite. Real-time chat will unlock automatically upon acceptance.
-                </span>
-              </div>
-            )}
-
-            {/* Messages */}
-            <div
-              ref={chatContainerRef}
-              onScroll={handleScroll}
-              className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3.5 bg-card"
-            >
-              {messages.map(renderMessage)}
-
-              {isPeerTyping && (
-                <div className="flex items-center gap-2 text-xs text-muted italic p-2">
-                  <div className="w-2 h-2 rounded-full bg-amber animate-bounce" />
-                  <span>{activePeer.name} is typing...</span>
-                </div>
-              )}
-
-              <div ref={messagesEndRef} />
-            </div>
-
-            {/* New messages indicator */}
-            {showNewMsgIndicator && (
-              <button
-                onClick={() => scrollToBottom(true)}
-                className="absolute bottom-20 left-1/4 -translate-x-1/2 bg-amber text-white text-xs px-3 py-1.5 rounded-full shadow-lg cursor-pointer animate-bounce z-10"
-              >
-                {'\u2193'} New messages
-              </button>
-            )}
-
-            {/* Quick AI & Help Prompts for Live Demos & Fast Intervention */}
-            <div className="px-3 py-1.5 bg-card border-t border-border flex items-center gap-1.5 overflow-x-auto text-[11px] shrink-0">
-              <span className="text-muted text-[10px] font-bold uppercase tracking-wider shrink-0 flex items-center gap-1">
-                <span>🤖</span>
-                <span>Ask AI:</span>
-              </span>
-              {[
-                '@ai explain useEffect cleanup',
-                '@ai how to fix race condition?',
-                '@ai what is a closure?',
-                '@ai compare useState vs useReducer',
-                "I'm confused about async error handling",
-              ].map((promptText, idx) => (
-                <button
-                  key={idx}
-                  type="button"
-                  onClick={() => setInput(promptText)}
-                  className="px-2.5 py-0.5 rounded-full bg-amber/10 hover:bg-amber/20 text-amber font-medium border border-amber/20 shrink-0 transition-colors cursor-pointer text-[11px]"
-                  title="Click to insert prompt"
-                >
-                  {promptText}
-                </button>
-              ))}
-            </div>
-
-            {/* Message Input */}
-            <form onSubmit={handleSendMessage} className="p-3 border-t border-border bg-card-alt flex gap-2 shrink-0">
-              {/* Voice record button */}
-              <button
-                type="button"
-                onClick={isRecording ? stopRecording : startRecording}
-                className={'p-2.5 rounded-xl border transition-all cursor-pointer ' +
-                  (isRecording
-                    ? 'bg-bad/15 border-bad text-bad animate-pulse'
-                    : 'bg-card border-border text-muted hover:text-amber hover:border-amber')}
-                title={isRecording ? 'Stop recording' : 'Record voice message'}
-              >
-                {isRecording ? '\u{23F9}\u{FE0F}' : '\u{1F3A4}'}
-              </button>
-
-              {isRecording ? (
-                <div className="flex-1 flex items-center gap-2 px-4">
-                  <span className="w-2 h-2 rounded-full bg-bad animate-pulse" />
-                  <span className="text-xs text-bad font-semibold">Recording...</span>
-                  <button
-                    type="button"
-                    onClick={stopRecording}
-                    className="ml-auto text-xs px-3 py-1 bg-bad/15 text-bad rounded-lg border border-bad/30 cursor-pointer"
-                  >
-                    Send Voice
-                  </button>
-                </div>
-              ) : (
-                <>
-                  <input
-                    type="text"
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    disabled={!isConnectionAccepted}
-                    placeholder={
-                      !isConnectionAccepted
-                        ? 'Chat locked \u2014 waiting for ' + activePeer.name + ' to accept...'
-                        : 'Message ' + activePeer.name + '...'
-                    }
-                    className="flex-1 px-4 py-2.5 bg-card border border-border rounded-xl text-ink text-xs sm:text-sm placeholder-muted/60 outline-none focus:border-amber disabled:opacity-60"
-                  />
-                  <button
-                    type="submit"
-                    disabled={!isConnectionAccepted || !input.trim()}
-                    className="px-4 py-2.5 bg-amber hover:bg-terracotta text-white font-bold text-xs rounded-xl shadow-xs transition-all disabled:opacity-50 cursor-pointer"
-                  >
-                    {!isConnectionAccepted ? 'Locked \u{1F512}' : 'Send \u2192'}
-                  </button>
-                </>
-              )}
-            </form>
+          {/* Left Column: Isolated Chat Window */}
+          <div className="lg:col-span-6">
+            <ChatWindow
+              key={currentThreadId}
+              threadId={currentThreadId}
+              threadType={activeStudyRoom ? 'room' : 'pair'}
+              connectionId={activePeer.connectionId}
+              studentName={studentName}
+              studentEmail={studentEmail}
+              studentTrack={studentTrack}
+              activePeer={activePeer}
+              isConnectionAccepted={isConnectionAccepted}
+              onStartCall={handleStartCall}
+              onTakePostQuiz={() => {
+                setPostQuizAnswers(new Array(preQuizQuestions.length).fill(-1));
+                setSessionPhase('post-quiz');
+              }}
+              onEndSessionAndSummarize={handleEndSessionAndSummarize}
+              onMessagesChange={(msgs) => setMessages(msgs)}
+              preScore={preScore}
+              postScore={postScore}
+              triggerStudyAssistantCheck={triggerStudyAssistantCheck}
+              showToast={showToast}
+              userCode={codeSnippet}
+              assistantDisabledForSession={assistantDisabledForSession}
+              setAssistantDisabledForSession={setAssistantDisabledForSession}
+              assistantSuppressedUntil={assistantSuppressedUntil}
+              setAssistantSuppressedUntil={setAssistantSuppressedUntil}
+              tier1VoicePrompt={tier1VoicePrompt}
+              setTier1VoicePrompt={setTier1VoicePrompt}
+            />
           </div>
 
           {/* Right Column: Challenge & Rubric & Code Editor */}

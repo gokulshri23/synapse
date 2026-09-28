@@ -568,6 +568,110 @@ CREATE POLICY "Allow authenticated teaching_stats" ON public.teaching_stats FOR 
 CREATE POLICY "Allow authenticated video_library" ON public.video_library FOR ALL TO authenticated USING (true);
 CREATE POLICY "Allow authenticated video_effectiveness" ON public.video_effectiveness FOR ALL TO authenticated USING (true);
 
+-- =========================================================================
+-- Chat & Call Isolation Schema: Private Threads & Dedicated Calls
+-- =========================================================================
+
+-- Ensure messages table has thread_type and thread_id
+ALTER TABLE public.messages ADD COLUMN IF NOT EXISTS thread_type TEXT NOT NULL DEFAULT 'pair' CHECK (thread_type IN ('pair', 'room'));
+ALTER TABLE public.messages ADD COLUMN IF NOT EXISTS thread_id TEXT;
+ALTER TABLE public.messages ADD COLUMN IF NOT EXISTS sender_email TEXT;
+CREATE INDEX IF NOT EXISTS idx_messages_thread_lookup ON public.messages(thread_id, thread_type, created_at ASC);
+
+-- Lock down messages with isolated RLS
+DROP POLICY IF EXISTS "Allow all authenticated users" ON public.messages;
+DROP POLICY IF EXISTS "read own threads" ON public.messages;
+DROP POLICY IF EXISTS "write own threads" ON public.messages;
+
+CREATE POLICY "read own threads" ON public.messages FOR SELECT USING (
+  (thread_type = 'pair' AND EXISTS (
+     SELECT 1 FROM public.connections c
+     WHERE c.id::text = messages.thread_id AND c.status = 'accepted'
+       AND (
+         auth.uid()::text = c.requester_id 
+         OR auth.uid()::text = c.recipient_id 
+         OR lower(auth.jwt()->>'email') IN (lower(c.requester_id), lower(c.recipient_id))
+       )
+  ))
+  OR
+  (thread_type = 'room' AND EXISTS (
+     SELECT 1 FROM public.study_room_members m
+     WHERE m.room_id = messages.thread_id 
+       AND (m.user_id = auth.uid()::text OR lower(m.user_id) = lower(auth.jwt()->>'email'))
+  ))
+);
+
+CREATE POLICY "write own threads" ON public.messages FOR INSERT WITH CHECK (
+  (
+    thread_type = 'pair' AND EXISTS (
+       SELECT 1 FROM public.connections c
+       WHERE c.id::text = thread_id AND c.status = 'accepted'
+         AND (
+           auth.uid()::text IN (c.requester_id, c.recipient_id)
+           OR lower(auth.jwt()->>'email') IN (lower(c.requester_id), lower(c.recipient_id))
+           OR lower(sender_email) IN (lower(c.requester_id), lower(c.recipient_id))
+         )
+    )
+  )
+  OR
+  (
+    thread_type = 'room' AND EXISTS (
+       SELECT 1 FROM public.study_room_members m
+       WHERE m.room_id = thread_id 
+         AND (
+           m.user_id = auth.uid()::text 
+           OR lower(m.user_id) = lower(auth.jwt()->>'email')
+           OR lower(m.user_id) = lower(sender_email)
+         )
+    )
+  )
+);
+
+-- Calls Table for private 1-on-1 audio/video calls
+CREATE TABLE IF NOT EXISTS public.calls (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  connection_id TEXT NOT NULL,
+  caller_id TEXT NOT NULL,
+  caller_name TEXT,
+  caller_avatar TEXT,
+  callee_id TEXT NOT NULL,
+  type TEXT NOT NULL DEFAULT 'voice' CHECK (type IN ('voice', 'video', 'audio')),
+  status TEXT NOT NULL DEFAULT 'ringing' CHECK (status IN ('ringing', 'accepted', 'declined', 'missed', 'ended')),
+  room_name TEXT NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_calls_callee_status ON public.calls(callee_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_calls_connection ON public.calls(connection_id, status);
+
+ALTER TABLE public.calls ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "calls_select_own" ON public.calls;
+DROP POLICY IF EXISTS "calls_insert_own" ON public.calls;
+DROP POLICY IF EXISTS "calls_update_own" ON public.calls;
+
+CREATE POLICY "calls_select_own" ON public.calls FOR SELECT USING (
+  auth.uid()::text IN (caller_id, callee_id)
+  OR lower(auth.jwt()->>'email') IN (lower(caller_id), lower(callee_id))
+);
+
+CREATE POLICY "calls_insert_own" ON public.calls FOR INSERT WITH CHECK (
+  auth.uid()::text = caller_id
+  OR lower(auth.jwt()->>'email') = lower(caller_id)
+);
+
+CREATE POLICY "calls_update_own" ON public.calls FOR UPDATE USING (
+  auth.uid()::text IN (caller_id, callee_id)
+  OR lower(auth.jwt()->>'email') IN (lower(caller_id), lower(callee_id))
+);
+
+DO $$
+BEGIN
+  ALTER PUBLICATION supabase_realtime ADD TABLE public.calls;
+EXCEPTION WHEN OTHERS THEN
+  NULL;
+END $$;
+
+
 
 
 

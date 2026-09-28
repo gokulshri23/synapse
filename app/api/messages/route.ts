@@ -61,7 +61,7 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { threadId, content, senderName, senderEmail, type = 'text', voiceUrl } = body;
+    const { threadId, threadType = 'pair', content, senderName, senderEmail, type = 'text', voiceUrl } = body;
 
     if (!threadId || !content) {
       return NextResponse.json(
@@ -79,6 +79,7 @@ export async function POST(req: Request) {
           .from('messages')
           .insert({
             thread_id: threadId,
+            thread_type: threadType || 'pair',
             content,
             sender_name: senderName || 'Learner',
             sender_email: (senderEmail || '').toLowerCase().trim(),

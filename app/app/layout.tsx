@@ -102,7 +102,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     router.push('/login');
   };
 
-  // Listen for incoming live calls across all dashboard views
+  // Listen for incoming live calls specifically targeted to this user across all dashboard views
   useEffect(() => {
     if (pathname === '/app/sessions') {
       setGlobalIncomingCall(null);
@@ -110,34 +110,29 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     }
 
     const checkIncomingCalls = async () => {
+      const myEmailLower = (profile?.email || '').trim().toLowerCase();
+      if (!myEmailLower) return;
+
       try {
-        const res = await fetch('/api/peer-network?sessionId=global_collab');
+        const res = await fetch(`/api/calls?calleeId=${encodeURIComponent(myEmailLower)}`);
         if (res.ok) {
           const data = await res.json();
-          if (Array.isArray(data.messages) && data.messages.length > 0) {
-            const myEmailLower = (profile?.email || '').trim().toLowerCase();
-            const invite = data.messages
-              .slice()
-              .reverse()
-              .find((m: any) => {
-                if (m.type !== 'call_invite' && !m.callUrl) return false;
-                const senderLower = (m.senderId || '').trim().toLowerCase();
-                if (myEmailLower && senderLower === myEmailLower) return false;
-                if (dismissedCallIdsRef.current.has(m.id)) return false;
-                if (m.createdAt && Date.now() - m.createdAt > 120000) return false;
-                return true;
-              });
-
-            if (invite) {
+          if (Array.isArray(data.calls) && data.calls.length > 0) {
+            const active = data.calls.find((c: any) => !dismissedCallIdsRef.current.has(c.id) && c.status === 'ringing');
+            if (active) {
+              const displayName = encodeURIComponent(myEmailLower.split('@')[0] || 'Peer');
+              const callUrl = `https://meet.jit.si/${active.room_name}#config.startWithVideoMuted=${active.type === 'voice'}&config.prejoinPageEnabled=false&config.disableDeepLinking=true&userInfo.displayName="${displayName}"`;
               setGlobalIncomingCall({
-                id: invite.id,
-                callerName: invite.senderName || 'Peer Partner',
-                callUrl: invite.callUrl,
-                callMode: invite.callMode || 'video',
+                id: active.id,
+                callerName: active.caller_name || 'Peer Partner',
+                callUrl,
+                callMode: active.type === 'voice' ? 'voice' : 'video',
               });
             } else {
               setGlobalIncomingCall(null);
             }
+          } else {
+            setGlobalIncomingCall(null);
           }
         }
       } catch (e) {}
@@ -157,6 +152,11 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const handleDeclineGlobalCall = () => {
     if (!globalIncomingCall) return;
     dismissedCallIdsRef.current.add(globalIncomingCall.id);
+    fetch('/api/calls', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ callId: globalIncomingCall.id, status: 'declined' }),
+    }).catch(() => {});
     setGlobalIncomingCall(null);
   };
 

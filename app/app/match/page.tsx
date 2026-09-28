@@ -507,34 +507,31 @@ export default function MatchPage() {
     );
   };
 
-  // Poll for live messages when chat drawer is open
+  // Poll for live messages when chat drawer is open (Scoped strictly to this peer pair)
   useEffect(() => {
     if (!activeChatPeer) return;
     let isSubscribed = true;
 
+    const myEmailLower = (studentEmail || 'learner').trim().toLowerCase();
+    const peerLower = (activeChatPeer.id || 'peer').trim().toLowerCase();
+    const pairSessionId = `pair__${[myEmailLower, peerLower].sort().join('__')}`;
+
     const poll = async () => {
       try {
-        const res = await fetch(`/api/peer-network?sessionId=global_collab`);
+        const res = await fetch(`/api/messages?threadId=${encodeURIComponent(pairSessionId)}&limit=50`);
         if (res.ok && isSubscribed) {
           const data = await res.json();
-          if (Array.isArray(data.messages) && data.messages.length > 0) {
+          if (Array.isArray(data.messages)) {
             setMatchChatMessages((prev) => {
               const existingIds = new Set(prev.map((m) => m.id));
-              const myEmailLower = (studentEmail || '').trim().toLowerCase();
-
               const newIncoming = data.messages
-                .filter((m: any) => {
-                  if (existingIds.has(m.id)) return false;
-                  const senderLower = (m.senderId || '').trim().toLowerCase();
-                  if (myEmailLower && senderLower === myEmailLower) return false;
-                  return true;
-                })
+                .filter((m: any) => !existingIds.has(m.id) && (m.thread_id === pairSessionId || !m.thread_id))
                 .map((m: any) => ({
                   id: m.id,
-                  text: m.text,
-                  sender: 'peer' as const,
-                  time: m.timestamp || 'Now',
-                  senderName: m.senderName,
+                  text: m.content || m.text || '',
+                  sender: (m.sender_email || m.senderId || '').trim().toLowerCase() === myEmailLower ? ('me' as const) : ('peer' as const),
+                  time: m.created_at ? new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Now',
+                  senderName: m.sender_name || m.senderName,
                 }));
 
               if (newIncoming.length > 0) {
@@ -547,7 +544,8 @@ export default function MatchPage() {
       } catch (e) {}
     };
 
-    const interval = setInterval(poll, 1500);
+    poll();
+    const interval = setInterval(poll, 2500);
     return () => {
       isSubscribed = false;
       clearInterval(interval);
@@ -577,18 +575,22 @@ export default function MatchPage() {
     setMatchChatMessages((prev) => [...prev, userMsg]);
     setMatchChatInput('');
 
-    // Broadcast to peer network
     const mySenderId = (studentEmail || 'user_' + studentName).trim().toLowerCase();
+    const peerLower = (activeChatPeer.id || 'peer').trim().toLowerCase();
+    const pairSessionId = `pair__${[mySenderId, peerLower].sort().join('__')}`;
+
+    // Post to isolated messages API
     try {
-      fetch('/api/peer-network', {
+      fetch('/api/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          type: 'message',
-          sessionId: 'global_collab',
-          senderId: mySenderId,
+          threadId: pairSessionId,
+          threadType: 'pair',
+          senderEmail: mySenderId,
           senderName: studentName,
-          text: textToSend,
+          content: textToSend,
+          type: 'text',
         }),
       });
     } catch (e) {}
@@ -608,18 +610,33 @@ export default function MatchPage() {
 
       if (res.ok) {
         const data = await res.json();
-        setTimeout(() => {
+        setTimeout(async () => {
           setIsMatchChatTyping(false);
+          const replyText = data.reply || "That sounds great! Let's work on this topic together.";
           setMatchChatMessages((prev) => [
             ...prev,
             {
               id: 'reply_' + Date.now(),
-              text: data.reply || "That sounds great! Let's work on this topic together.",
+              text: replyText,
               sender: 'peer',
               time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
               senderName: activeChatPeer.name,
             },
           ]);
+          try {
+            await fetch('/api/messages', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                threadId: pairSessionId,
+                threadType: 'pair',
+                senderEmail: 'ai_copilot@synapse.edu',
+                senderName: activeChatPeer.name,
+                content: replyText,
+                type: 'text',
+              }),
+            });
+          } catch (e) {}
         }, 800);
       } else {
         setIsMatchChatTyping(false);

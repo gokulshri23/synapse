@@ -279,6 +279,20 @@ interface CloudStoreData {
   agent_decisions: AgentDecision[];
   session_summaries: SessionSummaryRecord[];
   teaching_stats: Record<string, TeachingStats>;
+  calls?: Record<string, CloudCallRecord>;
+}
+
+export interface CloudCallRecord {
+  id: string;
+  connection_id: string;
+  caller_id: string;
+  caller_name: string;
+  caller_avatar?: string;
+  callee_id: string;
+  type: 'voice' | 'video' | 'audio';
+  status: 'ringing' | 'accepted' | 'declined' | 'missed' | 'ended';
+  room_name: string;
+  created_at: string;
 }
 
 export interface CloudSignalingMessage {
@@ -338,6 +352,7 @@ function loadStore(): CloudStoreData {
         agent_decisions: Array.isArray(parsed.agent_decisions) ? parsed.agent_decisions : [],
         session_summaries: Array.isArray(parsed.session_summaries) ? parsed.session_summaries : [],
         teaching_stats: parsed.teaching_stats || {},
+        calls: parsed.calls || {},
       };
       return global.__synapse_cloud_cache;
     }
@@ -382,6 +397,7 @@ function loadStore(): CloudStoreData {
     agent_decisions: [],
     session_summaries: [],
     teaching_stats: {},
+    calls: {},
   };
 
   global.__synapse_cloud_cache = initial;
@@ -557,7 +573,7 @@ export function updatePeerHeartbeat(peer: Partial<CloudPeer> & { email: string; 
 export function getMessages(sessionId = 'global_collab', limit = 100): CloudMessage[] {
   const store = loadStore();
   return store.messages
-    .filter((m) => sessionId === 'global_collab' || m.sessionId === 'global_collab' || m.sessionId === sessionId)
+    .filter((m) => (m.sessionId || 'global_collab') === sessionId)
     .slice(-limit);
 }
 
@@ -1275,7 +1291,7 @@ export function addEnhancedMessage(msg: {
 export function getSessionLostFlags(sessionId: string): { senderId: string; count: number }[] {
   const store = loadStore();
   const sessionMsgs = store.messages.filter(
-    (m) => (m.sessionId === sessionId || m.sessionId === 'global_collab') && m.flagged
+    (m) => (m.sessionId || 'global_collab') === sessionId && m.flagged
   );
 
   const flagCounts: Record<string, number> = {};
@@ -2593,6 +2609,69 @@ export function updateTeachingStats(
   return updated;
 }
 
+// ─── Private Calls (pair-<connection_id>) ───────────────────────
+export function createCallRecord(call: {
+  connection_id: string;
+  caller_id: string;
+  caller_name: string;
+  caller_avatar?: string;
+  callee_id: string;
+  type?: 'voice' | 'video' | 'audio';
+  room_name?: string;
+}): CloudCallRecord {
+  const store = loadStore();
+  const id = `call_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  const record: CloudCallRecord = {
+    id,
+    connection_id: call.connection_id,
+    caller_id: (call.caller_id || '').trim().toLowerCase(),
+    caller_name: call.caller_name || 'Caller',
+    caller_avatar: call.caller_avatar,
+    callee_id: (call.callee_id || '').trim().toLowerCase(),
+    type: call.type || 'voice',
+    status: 'ringing',
+    room_name: call.room_name || `pair-${call.connection_id}`,
+    created_at: new Date().toISOString(),
+  };
 
+  if (!store.calls) store.calls = {};
+  store.calls[id] = record;
+  saveStore(store);
+  return record;
+}
 
+export function getIncomingCallsForUser(userId: string): CloudCallRecord[] {
+  const store = loadStore();
+  if (!store.calls) return [];
+  const normUser = (userId || '').trim().toLowerCase();
+  const now = Date.now();
+  const results: CloudCallRecord[] = [];
 
+  for (const c of Object.values(store.calls)) {
+    if (c.callee_id === normUser) {
+      const ageMs = now - new Date(c.created_at).getTime();
+      // Ring timeout 30s -> mark as missed
+      if (c.status === 'ringing' && ageMs > 30000) {
+        c.status = 'missed';
+      } else if (c.status === 'ringing' && ageMs <= 60000) {
+        results.push(c);
+      }
+    }
+  }
+
+  saveStore(store);
+  return results.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+}
+
+export function updateCallStatus(callId: string, status: CloudCallRecord['status']): CloudCallRecord | null {
+  const store = loadStore();
+  if (!store.calls || !store.calls[callId]) return null;
+  store.calls[callId].status = status;
+  saveStore(store);
+  return store.calls[callId];
+}
+
+export function getCallRecord(callId: string): CloudCallRecord | null {
+  const store = loadStore();
+  return store.calls?.[callId] || null;
+}
