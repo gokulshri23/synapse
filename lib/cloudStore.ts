@@ -299,8 +299,8 @@ export interface CloudSignalingMessage {
   id: string;
   sessionId: string;
   senderId: string;
-  recipientId: string;
-  type: 'webrtc_offer' | 'webrtc_answer' | 'webrtc_candidate' | 'webrtc_call_end';
+  recipientId?: string;
+  type: 'webrtc_offer' | 'webrtc_answer' | 'webrtc_candidate' | 'webrtc_call_end' | string;
   payload: any;
   createdAt: number;
 }
@@ -721,7 +721,7 @@ export function addSignalingMessage(msg: {
   sessionId?: string;
   senderId: string;
   recipientId?: string;
-  type: 'webrtc_offer' | 'webrtc_answer' | 'webrtc_candidate';
+  type: 'webrtc_offer' | 'webrtc_answer' | 'webrtc_candidate' | string;
   payload: any;
 }): CloudSignalingMessage {
   const store = loadStore();

@@ -4,7 +4,7 @@ import { getConnectionsForUser } from '@/lib/cloudStore';
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { userId, peerEmail, mode = 'voice', sessionId = 'global_collab' } = body;
+    const { userId, peerEmail, mode = 'voice', sessionId = 'global_collab', roomName: incomingRoomName } = body;
 
     if (!userId || !peerEmail) {
       return NextResponse.json(
@@ -42,7 +42,7 @@ export async function POST(req: NextRequest) {
     // Supports DAILY_API_KEY if configured in environment, otherwise generates a secure pair room
     // Generate deterministic room name for this pair so both peers meet in the exact same room
     const pairSlug = [normUser, normPeer].sort().map((u) => u.split('@')[0]).join('-').replace(/[^a-zA-Z0-9_-]/g, '_');
-    const roomName = `synapse-pair-${pairSlug}`;
+    const roomName = incomingRoomName || (sessionId && sessionId.startsWith('pair-') ? sessionId : `pair-${pairSlug}`);
     const displayName = encodeURIComponent(userId.split('@')[0] || 'Peer');
 
     // Reliable open WebRTC room (works immediately on desktop and mobile browsers)

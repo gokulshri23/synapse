@@ -1385,8 +1385,8 @@ function useAsync(asyncFn) {
     const myId = (studentEmail || studentName || 'user').trim().toLowerCase();
     const peerId = (activePeer.id || activePeer.name || 'peer').trim().toLowerCase();
     const connId = activePeer.connectionId || `pair_${[myId, peerId].sort().join('_')}`;
-    const deterministicCallSessionId = 'call__' + [myId, peerId].sort().join('__');
-    setActiveCallSessionId(deterministicCallSessionId);
+    const initialRoomName = `pair-${connId}`;
+    setActiveCallSessionId(initialRoomName);
     setIsCallInitiator(true);
 
     setCallConnecting(true);
@@ -1408,9 +1408,11 @@ function useAsync(asyncFn) {
         }),
       });
       const callData = await callRes.json();
+      const serverRoomName = callData.call?.room_name || initialRoomName;
       if (callData.call) {
         setCurrentCallId(callData.call.id);
       }
+      setActiveCallSessionId(serverRoomName);
 
       // 2. Generate room token / WebRTC URL
       const tokenRes = await fetch('/api/call-token', {
@@ -1420,7 +1422,8 @@ function useAsync(asyncFn) {
           userId: myId,
           peerEmail: peerId,
           mode,
-          sessionId: deterministicCallSessionId,
+          sessionId: serverRoomName,
+          roomName: serverRoomName,
         }),
       });
 
@@ -1506,12 +1509,11 @@ function useAsync(asyncFn) {
       });
     }
 
-    const myId = (studentEmail || studentName || 'user').trim().toLowerCase();
-    const deterministicCallSessionId =
+    const serverRoomName =
       incomingCall.callSessionId ||
-      'call__' + [myId, callerId.trim().toLowerCase()].sort().join('__');
+      `pair-${incomingCall.connectionId}`;
 
-    setActiveCallSessionId(deterministicCallSessionId);
+    setActiveCallSessionId(serverRoomName);
     setIsCallInitiator(false);
     setCallUrl(incomingCall.callUrl);
     setCallMode(incomingCall.callMode);
@@ -2513,6 +2515,8 @@ function useAsync(asyncFn) {
               currentUserEmail={studentEmail}
               peerEmail={activePeer.id}
               sessionId={activeCallSessionId || getSessionId()}
+              callId={currentCallId || undefined}
+              roomName={activeCallSessionId || undefined}
               isInitiator={isCallInitiator}
               onEndCall={handleEndCall}
             />
