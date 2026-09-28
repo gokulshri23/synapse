@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import PreJoinModal from '@/components/call/PreJoinModal';
 import StudyRoomView from '@/components/call/StudyRoomView';
+import NativeCallView from '@/components/call/NativeCallView';
 
 // ─── Types ────────────────────────────────────────────────────
 interface ChatMessage {
@@ -2047,80 +2048,17 @@ function useAsync(asyncFn) {
 
       {/* ─── Part 6: Live Call Modal ─────────────────────────────── */}
       {isCallModalOpen && (
-        <div className="fixed inset-0 z-[120] bg-ink/75 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in">
-          <div className="bg-card border border-border rounded-[24px] max-w-2xl w-full p-6 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-border">
-              <div className="flex items-center gap-3">
-                <span className="text-2xl animate-pulse">{callMode === 'voice' ? '📞' : '📹'}</span>
-                <div>
-                  <h3 className="font-serif font-bold text-ink text-base">
-                    Live {callMode === 'voice' ? 'Voice Call' : 'Video Call'} with {activePeer.name}
-                  </h3>
-                  <p className="text-xs text-emerald-600 font-medium flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
-                    WebRTC Encrypted Room • Ringing on peer's screen
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={handleEndCall}
-                className="text-xs px-3.5 py-1.5 bg-bad/15 text-bad border border-bad/30 rounded-xl hover:bg-bad/25 cursor-pointer font-bold transition-colors"
-              >
-                End Call
-              </button>
-            </div>
-
-            {/* Connection Timeout Warning */}
-            {callTimeout && (
-              <div className="p-3 bg-amber/15 border border-amber/30 rounded-xl text-xs text-ink flex items-center gap-2">
-                <span>⚠️</span>
-                <span>Connecting is taking a few moments. If the peer is ready, you can also open the call in a separate window below.</span>
-              </div>
-            )}
-
-            {/* Call Screen / Frame */}
-            <div className="h-[420px] bg-ink/95 rounded-2xl flex flex-col items-center justify-center text-white relative overflow-hidden shadow-inner">
-              {callUrl ? (
-                <iframe
-                  src={callUrl}
-                  allow="camera; microphone; fullscreen; display-capture; autoplay; clipboard-write"
-                  className="w-full h-full border-0 rounded-2xl"
-                  title="Synapse Live WebRTC Call"
-                />
-              ) : (
-                <div className="text-center space-y-3 p-6">
-                  <div className="w-16 h-16 rounded-full bg-amber/20 text-amber flex items-center justify-center text-2xl mx-auto animate-bounce">
-                    {callMode === 'voice' ? '📞' : '📹'}
-                  </div>
-                  <p className="text-sm font-semibold">Initiating call to {activePeer.name}...</p>
-                  <p className="text-xs text-zinc-400">Microphone {callMode === 'video' ? 'and camera active' : 'active (camera off)'}</p>
-                </div>
-              )}
-            </div>
-
-            <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
-              <div className="flex items-center gap-3">
-                <span className="text-xs text-muted">
-                  {callMode === 'voice' ? '🎙️ Audio active' : '📹 Video & audio live'}
-                </span>
-                {callUrl && (
-                  <a
-                    href={callUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-xs px-3 py-1.5 bg-amber/15 border border-amber/30 text-amber hover:bg-amber/25 rounded-xl font-bold flex items-center gap-1.5 transition-colors"
-                  >
-                    <span>↗</span> Open Full Screen
-                  </a>
-                )}
-              </div>
-              <button
-                onClick={handleEndCall}
-                className="py-2.5 px-6 bg-bad hover:bg-red-700 text-white font-bold text-xs rounded-xl shadow-xs transition-colors cursor-pointer"
-              >
-                Leave &amp; End Call
-              </button>
-            </div>
+        <div className="fixed inset-0 z-[120] bg-ink/75 backdrop-blur-md flex items-center justify-center p-3 sm:p-6 animate-fade-in">
+          <div className="bg-[#1C1917] border border-border/30 rounded-[28px] max-w-4xl w-full h-[580px] p-2 sm:p-3 shadow-2xl flex flex-col overflow-hidden relative">
+            <NativeCallView
+              mode={callMode}
+              peerName={activePeer.name}
+              currentUserName={studentName}
+              currentUserEmail={studentEmail}
+              peerEmail={activePeer.id}
+              sessionId={getSessionId()}
+              onEndCall={handleEndCall}
+            />
           </div>
         </div>
       )}

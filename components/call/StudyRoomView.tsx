@@ -1,6 +1,7 @@
 'use client';
 import React, { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import DailyIframe, { DailyCall } from '@daily-co/daily-js';
+import NativeCallView from './NativeCallView';
 import {
   DailyProvider,
   DailyVideo,
@@ -1287,12 +1288,15 @@ function FreeRoomStage({
       <div className="flex-1 flex overflow-hidden relative">
         {/* Video Stage */}
         <div className="flex-1 p-2 sm:p-4 flex flex-col items-center justify-center overflow-hidden">
-          <div className="w-full h-full bg-[#1C1917] rounded-2xl overflow-hidden relative border border-border shadow-2xl flex flex-col">
-            <iframe
-              src={freeCallUrl}
-              allow="camera; microphone; fullscreen; display-capture; autoplay; clipboard-write; screen-wake-lock"
-              className="w-full h-full border-0 rounded-2xl"
-              title="Synapse Free Study Room"
+          <div className="w-full h-full bg-[#1C1917] rounded-2xl overflow-hidden relative border border-border/40 shadow-2xl flex flex-col">
+            <NativeCallView
+              mode={initialVideoEnabled ? 'video' : 'voice'}
+              peerName={room.host_name || 'Study Partner'}
+              currentUserName={currentUser.name}
+              currentUserEmail={currentUser.email}
+              peerEmail={room.host_id}
+              sessionId={room.id}
+              onEndCall={() => setShowLeaveConfirm(true)}
             />
           </div>
         </div>
