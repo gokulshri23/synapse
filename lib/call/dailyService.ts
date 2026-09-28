@@ -49,11 +49,12 @@ export async function createDailyRoom(params: {
   const sanitizedRoomName = params.roomName.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 40);
 
   if (!apiKey) {
-    console.warn('[DailyService] DAILY_API_KEY is not set. Using secure fallback room URL.');
+    console.info('[CallService] 100% Free WebRTC Mode active (Zero cost, no credit card or account needed)');
+    const freeRoomUrl = `https://meet.jit.si/synapse-${sanitizedRoomName}#config.prejoinPageEnabled=false&config.disableDeepLinking=true&config.toolbarButtons=%5B'microphone','camera','desktop','chat','raisehand','tileview','hangup'%5D`;
     return {
       success: true,
       roomName: sanitizedRoomName,
-      roomUrl: `https://synapse-demo.daily.co/${sanitizedRoomName}`,
+      roomUrl: freeRoomUrl,
       isMockFallback: true,
     };
   }
@@ -135,10 +136,15 @@ export async function createDailyMeetingToken(params: {
   const apiKey = process.env.DAILY_API_KEY;
 
   if (!apiKey) {
+    const cleanRoom = params.roomName.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 40) || 'collab';
+    const displayName = encodeURIComponent(params.userName || 'Learner');
+    const startMuted = params.startAudioOff ? '&config.startWithAudioMuted=true' : '';
+    const startVideoOff = params.startVideoOff ? '&config.startWithVideoMuted=true' : '';
+    const freeRoomUrl = `https://meet.jit.si/synapse-${cleanRoom}#config.prejoinPageEnabled=false&config.disableDeepLinking=true&userInfo.displayName="${displayName}"${startMuted}${startVideoOff}&config.toolbarButtons=%5B'microphone','camera','desktop','chat','raisehand','tileview','hangup'%5D`;
     return {
       success: true,
-      token: `token_demo_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-      roomUrl: `https://synapse-demo.daily.co/${params.roomName}`,
+      token: undefined,
+      roomUrl: freeRoomUrl,
     };
   }
 

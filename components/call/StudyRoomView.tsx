@@ -37,20 +37,36 @@ interface StudyRoomViewProps {
   onLeave: (summary?: any) => void;
 }
 
-// ─── Main Wrapper that initializes DailyCall and provides DailyProvider ────
+// ─── Main Wrapper that initializes DailyCall or 100% Free WebRTC Stage ────
 export default function StudyRoomView(props: StudyRoomViewProps) {
   const [callObject, setCallObject] = useState<DailyCall | null>(null);
-  const [initError, setInitError] = useState<string | null>(null);
   const [isJoining, setIsJoining] = useState(true);
+  const [useFreeStage, setUseFreeStage] = useState(
+    !props.token || Boolean(props.roomUrl?.includes('meet.jit.si')) || Boolean(!props.roomUrl?.includes('.daily.co'))
+  );
 
   useEffect(() => {
+    // If explicitly in 100% free mode (no token or Jitsi URL), skip Daily initialization
+    if (useFreeStage) {
+      setIsJoining(false);
+      return;
+    }
+
     let call: DailyCall | null = null;
     let isMounted = true;
 
     async function setupDaily() {
       try {
-        const targetUrl = props.roomUrl || props.room.daily_room_url || `https://synapse-demo.daily.co/${props.room.daily_room_name}`;
-        
+        const targetUrl = props.roomUrl || props.room.daily_room_url;
+        if (!targetUrl || targetUrl.includes('demo') || !props.token) {
+          // Gracefully fallback to 100% free open WebRTC mode
+          if (isMounted) {
+            setUseFreeStage(true);
+            setIsJoining(false);
+          }
+          return;
+        }
+
         call = DailyIframe.createCallObject({
           audioSource: props.initialAudioEnabled,
           videoSource: props.initialVideoEnabled,
@@ -74,9 +90,9 @@ export default function StudyRoomView(props: StudyRoomViewProps) {
 
         if (isMounted) setIsJoining(false);
       } catch (err: any) {
-        console.error('[StudyRoomView] Daily join error:', err);
+        console.warn('[StudyRoomView] Daily connect failed, automatically switching to Free WebRTC stage:', err);
         if (isMounted) {
-          setInitError(err?.message || 'Failed to connect to the learning room. Please check your network.');
+          setUseFreeStage(true);
           setIsJoining(false);
         }
       }
@@ -91,28 +107,10 @@ export default function StudyRoomView(props: StudyRoomViewProps) {
         call.destroy().catch(() => {});
       }
     };
-  }, [props.roomUrl, props.room.daily_room_url, props.room.daily_room_name, props.token, props.currentUser.name, props.initialAudioEnabled, props.initialVideoEnabled]);
+  }, [useFreeStage, props.roomUrl, props.room.daily_room_url, props.token, props.currentUser.name, props.initialAudioEnabled, props.initialVideoEnabled]);
 
-  if (initError) {
-    return (
-      <div className="fixed inset-0 z-[200] bg-canvas flex items-center justify-center p-6 text-ink">
-        <div className="bg-card border border-bad/40 rounded-[24px] max-w-md w-full p-8 shadow-2xl text-center space-y-4 animate-fade-in">
-          <div className="w-14 h-14 rounded-2xl bg-bad/15 text-bad flex items-center justify-center text-3xl mx-auto">
-            ⚠️
-          </div>
-          <h3 className="font-serif font-bold text-xl text-ink">Connection Failed</h3>
-          <p className="text-xs text-muted leading-relaxed">{initError}</p>
-          <div className="pt-2 flex flex-col gap-2">
-            <button
-              onClick={() => props.onLeave()}
-              className="w-full py-3 bg-amber hover:bg-terracotta text-white font-semibold text-xs rounded-xl shadow-xs transition-colors cursor-pointer"
-            >
-              Back to Sessions Lobby
-            </button>
-          </div>
-        </div>
-      </div>
-    );
+  if (useFreeStage) {
+    return <FreeRoomStage {...props} />;
   }
 
   if (isJoining || !callObject) {
@@ -1051,6 +1049,522 @@ function RoomStageInner({
       {reportToast && (
         <div className="fixed top-5 left-1/2 -translate-x-1/2 z-[300] bg-ink text-white px-4 py-2.5 rounded-xl text-xs shadow-2xl flex items-center gap-2 animate-slide-down">
           <span>✓</span> {reportToast}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── 100% Free WebRTC Study Room Stage (No Paid Account / No Daily Key Needed) ────
+function FreeRoomStage({
+  room,
+  currentUser,
+  onLeave,
+  initialVideoEnabled,
+  initialAudioEnabled,
+  roomUrl,
+}: StudyRoomViewProps) {
+  const [activeTab, setActiveTab] = useState<'chat' | 'files' | 'board' | 'people' | null>(null);
+  const [sessionSeconds, setSessionSeconds] = useState(0);
+  const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
+  const [showWrapUp, setShowWrapUp] = useState(false);
+  const [wrapUpData, setWrapUpData] = useState<any>(null);
+  const [wrapUpFeedback, setWrapUpFeedback] = useState('');
+  const [wrapUpRating, setWrapUpRating] = useState(5);
+
+  // Chat state
+  const [messages, setMessages] = useState<Array<{ id: string; sender: string; text: string; time: string }>>([
+    {
+      id: 'welcome',
+      sender: 'System',
+      text: `Welcome to ${room.name}! This free learning room is focused on ${room.topic}.`,
+      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    },
+  ]);
+  const [chatInput, setChatInput] = useState('');
+
+  // Resources
+  const [resources, setResources] = useState<Array<{ id: string; title: string; url: string; userName: string; kind: 'file' | 'link' }>>([]);
+  const [newLinkTitle, setNewLinkTitle] = useState('');
+  const [newLinkUrl, setNewLinkUrl] = useState('');
+  const [isAddingLink, setIsAddingLink] = useState(false);
+
+  // Whiteboard
+  const [boardColor, setBoardColor] = useState('#D97706');
+  const [isDrawing, setIsDrawing] = useState(false);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  // Free WebRTC URL
+  const cleanRoom = room.name.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 40) || 'study';
+  const displayName = encodeURIComponent(currentUser.name || 'Learner');
+  const startMuted = !initialAudioEnabled ? '&config.startWithAudioMuted=true' : '';
+  const startVideoOff = !initialVideoEnabled ? '&config.startWithVideoMuted=true' : '';
+  const freeCallUrl = roomUrl?.includes('meet.jit.si')
+    ? roomUrl
+    : `https://meet.jit.si/synapse-${cleanRoom}#config.prejoinPageEnabled=false&config.disableDeepLinking=true&userInfo.displayName="${displayName}"${startMuted}${startVideoOff}&config.toolbarButtons=%5B'microphone','camera','desktop','chat','raisehand','tileview','hangup'%5D`;
+
+  // Session timer
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setSessionSeconds((prev) => prev + 1);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const formatTimer = (secs: number) => {
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
+    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  };
+
+  // Heartbeat attendance
+  useEffect(() => {
+    const sendHeartbeat = () => {
+      fetch('/api/study-rooms', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'heartbeat',
+          roomId: room.id,
+          userId: currentUser.email,
+          userName: currentUser.name,
+        }),
+      }).catch(() => {});
+    };
+    sendHeartbeat();
+    const interval = setInterval(sendHeartbeat, 30000);
+    return () => clearInterval(interval);
+  }, [room.id, currentUser.email, currentUser.name]);
+
+  // Load resources
+  useEffect(() => {
+    fetch(`/api/study-rooms?action=resources&roomId=${encodeURIComponent(room.id)}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (Array.isArray(data.resources)) setResources(data.resources);
+      })
+      .catch(() => {});
+  }, [room.id]);
+
+  const handleSendMessage = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!chatInput.trim()) return;
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: `msg-${Date.now()}`,
+        sender: currentUser.name,
+        text: chatInput.trim(),
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      },
+    ]);
+    setChatInput('');
+  };
+
+  const handleAddLink = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newLinkTitle.trim() || !newLinkUrl.trim()) return;
+    try {
+      const res = await fetch('/api/study-rooms', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'resource',
+          roomId: room.id,
+          title: newLinkTitle.trim(),
+          url: newLinkUrl.trim(),
+          userName: currentUser.name,
+          kind: 'link',
+        }),
+      });
+      const data = await res.json();
+      if (data.success && data.resource) {
+        setResources((prev) => [data.resource, ...prev]);
+        setNewLinkTitle('');
+        setNewLinkUrl('');
+        setIsAddingLink(false);
+      }
+    } catch {}
+  };
+
+  const handleEndSession = async () => {
+    try {
+      const res = await fetch('/api/study-rooms', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'leave',
+          roomId: room.id,
+          userId: currentUser.email,
+          durationSeconds: sessionSeconds,
+        }),
+      });
+      const data = await res.json();
+      setWrapUpData({
+        duration: sessionSeconds,
+        xpAwarded: data.xpAwarded || (sessionSeconds >= 600 ? 40 : 0),
+        participants: 2,
+      });
+      setShowWrapUp(true);
+    } catch {
+      onLeave();
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[150] bg-canvas flex flex-col text-ink select-none animate-fade-in font-sans">
+      {/* Top Header */}
+      <header className="h-14 bg-card border-b border-border px-4 sm:px-6 flex items-center justify-between shadow-2xs z-30 shrink-0">
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+            <h2 className="font-serif font-bold text-sm sm:text-base text-ink truncate max-w-[140px] sm:max-w-xs">
+              {room.name}
+            </h2>
+          </div>
+          <span className="hidden sm:inline-flex text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-amber/10 text-amber border border-amber/20">
+            {room.topic}
+          </span>
+          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 border border-emerald-500/20">
+            100% Free WebRTC
+          </span>
+        </div>
+
+        <div className="flex items-center gap-3">
+          {/* Session Timer */}
+          <div className="text-xs font-mono font-semibold px-2.5 py-1 bg-card-alt border border-border rounded-lg text-ink flex items-center gap-1.5 shadow-2xs">
+            <span>⏱</span>
+            <span>{formatTimer(sessionSeconds)}</span>
+          </div>
+
+          {/* Drawer Tabs */}
+          <div className="hidden sm:flex items-center gap-1 bg-card-alt border border-border p-1 rounded-xl">
+            <button
+              onClick={() => setActiveTab(activeTab === 'chat' ? null : 'chat')}
+              className={`px-2.5 py-1 rounded-lg text-xs font-semibold cursor-pointer transition-colors ${
+                activeTab === 'chat' ? 'bg-amber text-white shadow-2xs' : 'text-muted hover:text-ink'
+              }`}
+            >
+              💬 Chat
+            </button>
+            <button
+              onClick={() => setActiveTab(activeTab === 'files' ? null : 'files')}
+              className={`px-2.5 py-1 rounded-lg text-xs font-semibold cursor-pointer transition-colors ${
+                activeTab === 'files' ? 'bg-amber text-white shadow-2xs' : 'text-muted hover:text-ink'
+              }`}
+            >
+              📁 Files
+            </button>
+            <button
+              onClick={() => setActiveTab(activeTab === 'board' ? null : 'board')}
+              className={`px-2.5 py-1 rounded-lg text-xs font-semibold cursor-pointer transition-colors ${
+                activeTab === 'board' ? 'bg-amber text-white shadow-2xs' : 'text-muted hover:text-ink'
+              }`}
+            >
+              🎨 Board
+            </button>
+            <button
+              onClick={() => setActiveTab(activeTab === 'people' ? null : 'people')}
+              className={`px-2.5 py-1 rounded-lg text-xs font-semibold cursor-pointer transition-colors ${
+                activeTab === 'people' ? 'bg-amber text-white shadow-2xs' : 'text-muted hover:text-ink'
+              }`}
+            >
+              👥 People
+            </button>
+          </div>
+
+          {/* Leave Button */}
+          <button
+            onClick={() => setShowLeaveConfirm(true)}
+            className="text-xs font-bold px-3 py-1.5 bg-bad/15 text-bad hover:bg-bad/25 border border-bad/30 rounded-xl transition-colors cursor-pointer"
+          >
+            Leave
+          </button>
+        </div>
+      </header>
+
+      {/* Main Room Body */}
+      <div className="flex-1 flex overflow-hidden relative">
+        {/* Video Stage */}
+        <div className="flex-1 p-2 sm:p-4 flex flex-col items-center justify-center overflow-hidden">
+          <div className="w-full h-full bg-[#1C1917] rounded-2xl overflow-hidden relative border border-border shadow-2xl flex flex-col">
+            <iframe
+              src={freeCallUrl}
+              allow="camera; microphone; fullscreen; display-capture; autoplay; clipboard-write; screen-wake-lock"
+              className="w-full h-full border-0 rounded-2xl"
+              title="Synapse Free Study Room"
+            />
+          </div>
+        </div>
+
+        {/* 4-Tab Side Drawer */}
+        {activeTab && (
+          <aside className="w-80 sm:w-96 bg-card border-l border-border flex flex-col z-20 shadow-xl animate-fade-in shrink-0">
+            <div className="p-4 border-b border-border flex items-center justify-between">
+              <h3 className="font-serif font-bold text-sm text-ink capitalize">{activeTab}</h3>
+              <button onClick={() => setActiveTab(null)} className="text-muted hover:text-ink text-sm font-bold cursor-pointer">
+                ✕
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4">
+              {activeTab === 'chat' && (
+                <div className="h-full flex flex-col space-y-3">
+                  <div className="flex-1 overflow-y-auto space-y-2.5 pr-1">
+                    {messages.map((m) => (
+                      <div key={m.id} className="p-2.5 bg-card-alt rounded-xl border border-border text-xs">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="font-bold text-ink">{m.sender}</span>
+                          <span className="text-[10px] text-muted">{m.time}</span>
+                        </div>
+                        <p className="text-ink/90 whitespace-pre-wrap">{m.text}</p>
+                      </div>
+                    ))}
+                  </div>
+                  <form onSubmit={handleSendMessage} className="flex gap-2 pt-2 border-t border-border">
+                    <input
+                      value={chatInput}
+                      onChange={(e) => setChatInput(e.target.value)}
+                      placeholder="Type a message or code..."
+                      className="flex-1 p-2 bg-card-alt border border-border rounded-xl text-xs text-ink outline-none focus:border-amber"
+                    />
+                    <button
+                      type="submit"
+                      className="px-3.5 py-2 bg-amber hover:bg-terracotta text-white font-semibold rounded-xl text-xs transition-colors cursor-pointer"
+                    >
+                      Send
+                    </button>
+                  </form>
+                </div>
+              )}
+
+              {activeTab === 'files' && (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between pb-2 border-b border-border">
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-muted">Shared Resources</h4>
+                    <button
+                      onClick={() => setIsAddingLink(!isAddingLink)}
+                      className="text-xs text-amber font-semibold hover:underline cursor-pointer"
+                    >
+                      {isAddingLink ? 'Cancel' : '+ Add Link'}
+                    </button>
+                  </div>
+                  {isAddingLink && (
+                    <form onSubmit={handleAddLink} className="p-3 bg-card-alt rounded-xl border border-border space-y-2 text-xs">
+                      <input
+                        required
+                        value={newLinkTitle}
+                        onChange={(e) => setNewLinkTitle(e.target.value)}
+                        placeholder="Resource title"
+                        className="w-full p-2 bg-card border border-border rounded-lg text-ink text-xs outline-none focus:border-amber"
+                      />
+                      <input
+                        required
+                        type="url"
+                        value={newLinkUrl}
+                        onChange={(e) => setNewLinkUrl(e.target.value)}
+                        placeholder="https://..."
+                        className="w-full p-2 bg-card border border-border rounded-lg text-ink text-xs outline-none focus:border-amber"
+                      />
+                      <button
+                        type="submit"
+                        className="w-full py-1.5 bg-amber hover:bg-terracotta text-white font-semibold rounded-lg text-xs cursor-pointer"
+                      >
+                        Share
+                      </button>
+                    </form>
+                  )}
+                  <div className="space-y-2">
+                    {resources.length === 0 ? (
+                      <p className="text-xs text-muted text-center py-6">No shared links yet.</p>
+                    ) : (
+                      resources.map((r) => (
+                        <div key={r.id} className="p-3 bg-card-alt rounded-xl border border-border space-y-1">
+                          <span className="text-xs font-semibold text-ink block">{r.title}</span>
+                          <a href={r.url} target="_blank" rel="noopener noreferrer" className="text-xs text-amber hover:underline truncate block">
+                            ↗ {r.url}
+                          </a>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {activeTab === 'board' && (
+                <div className="h-full flex flex-col space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold uppercase tracking-wider text-muted">Drawing Canvas</span>
+                    <div className="flex gap-1.5">
+                      {['#D97706', '#2ee6a8', '#ff4d6a', '#1C1917'].map((c) => (
+                        <button
+                          key={c}
+                          onClick={() => setBoardColor(c)}
+                          className={`w-5 h-5 rounded-full border cursor-pointer ${
+                            boardColor === c ? 'ring-2 ring-amber scale-110' : 'opacity-70'
+                          }`}
+                          style={{ backgroundColor: c }}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                  <div className="flex-1 bg-white rounded-xl border border-border relative overflow-hidden shadow-inner min-h-[300px]">
+                    <canvas
+                      ref={canvasRef}
+                      width={320}
+                      height={360}
+                      className="w-full h-full cursor-crosshair"
+                      onMouseDown={(e) => {
+                        const canvas = canvasRef.current;
+                        if (!canvas) return;
+                        const ctx = canvas.getContext('2d');
+                        if (!ctx) return;
+                        setIsDrawing(true);
+                        const rect = canvas.getBoundingClientRect();
+                        ctx.beginPath();
+                        ctx.strokeStyle = boardColor;
+                        ctx.lineWidth = 2.5;
+                        ctx.lineCap = 'round';
+                        ctx.moveTo(e.clientX - rect.left, e.clientY - rect.top);
+                      }}
+                      onMouseMove={(e) => {
+                        if (!isDrawing) return;
+                        const canvas = canvasRef.current;
+                        if (!canvas) return;
+                        const ctx = canvas.getContext('2d');
+                        if (!ctx) return;
+                        const rect = canvas.getBoundingClientRect();
+                        ctx.lineTo(e.clientX - rect.left, e.clientY - rect.top);
+                        ctx.stroke();
+                      }}
+                      onMouseUp={() => setIsDrawing(false)}
+                      onMouseLeave={() => setIsDrawing(false)}
+                    />
+                  </div>
+                  <button
+                    onClick={() => {
+                      const canvas = canvasRef.current;
+                      if (!canvas) return;
+                      const ctx = canvas.getContext('2d');
+                      if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    }}
+                    className="w-full py-1.5 bg-card-alt border border-border text-xs text-muted hover:text-bad rounded-lg font-medium transition-colors cursor-pointer"
+                  >
+                    Clear Board
+                  </button>
+                </div>
+              )}
+
+              {activeTab === 'people' && (
+                <div className="space-y-3">
+                  <div className="p-3 bg-card-alt rounded-xl border border-border flex items-center justify-between">
+                    <div>
+                      <span className="text-xs font-bold text-ink block">{currentUser.name} (You)</span>
+                      <span className="text-[10px] text-muted">{currentUser.email}</span>
+                    </div>
+                    {currentUser.isHost && (
+                      <span className="text-[10px] px-2 py-0.5 bg-amber text-white font-bold rounded-md">Host</span>
+                    )}
+                  </div>
+                  <div className="p-3 bg-card-alt rounded-xl border border-border flex items-center justify-between">
+                    <div>
+                      <span className="text-xs font-bold text-ink block">{room.host_name}</span>
+                      <span className="text-[10px] text-muted">Study Partner</span>
+                    </div>
+                    <span className="text-[10px] px-2 py-0.5 bg-ok/15 text-ok border border-ok/30 font-bold rounded-md">
+                      Verified teacher ✓
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+          </aside>
+        )}
+      </div>
+
+      {/* Leave Confirmation Modal */}
+      {showLeaveConfirm && (
+        <div className="fixed inset-0 z-[250] bg-ink/75 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
+          <div className="bg-card border border-border rounded-[24px] max-w-sm w-full p-6 shadow-2xl space-y-4">
+            <h3 className="font-serif font-bold text-lg text-ink">Leave Learning Session?</h3>
+            <p className="text-xs text-muted leading-relaxed">
+              {sessionSeconds >= 600
+                ? 'Great job! You have reached 10 minutes and will be awarded +40 XP upon concluding.'
+                : `You have attended for ${formatTimer(sessionSeconds)}. Attending for at least 10 minutes is required to earn +40 XP.`}
+            </p>
+            <div className="flex gap-2 pt-2">
+              <button
+                onClick={() => setShowLeaveConfirm(false)}
+                className="flex-1 py-2.5 bg-card-alt border border-border text-xs font-semibold text-ink rounded-xl hover:bg-card transition-colors cursor-pointer"
+              >
+                Keep Learning
+              </button>
+              <button
+                onClick={() => {
+                  setShowLeaveConfirm(false);
+                  handleEndSession();
+                }}
+                className="flex-1 py-2.5 bg-bad text-white text-xs font-bold rounded-xl hover:bg-red-700 transition-colors cursor-pointer"
+              >
+                End Session
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Wrap-up Feedback Modal */}
+      {showWrapUp && wrapUpData && (
+        <div className="fixed inset-0 z-[300] bg-ink/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in">
+          <div className="bg-card border border-border rounded-[26px] max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="text-center space-y-2">
+              <div className="w-14 h-14 rounded-2xl bg-amber/15 text-amber text-2xl flex items-center justify-center mx-auto">
+                🎓
+              </div>
+              <h3 className="font-serif font-bold text-xl text-ink">Session Complete!</h3>
+              <p className="text-xs text-muted">You studied {room.topic} in {room.name}</p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 py-2">
+              <div className="p-3 bg-card-alt rounded-xl border border-border text-center">
+                <span className="text-[10px] text-muted block uppercase tracking-wider">Duration</span>
+                <span className="text-lg font-mono font-bold text-ink">{formatTimer(wrapUpData.duration)}</span>
+              </div>
+              <div className="p-3 bg-card-alt rounded-xl border border-border text-center">
+                <span className="text-[10px] text-muted block uppercase tracking-wider">XP Earned</span>
+                <span className="text-lg font-bold text-amber">+{wrapUpData.xpAwarded} XP</span>
+              </div>
+            </div>
+
+            <div className="space-y-3 pt-2">
+              <label className="text-xs font-semibold text-ink block">Rate your session experience</label>
+              <div className="flex gap-2">
+                {[1, 2, 3, 4, 5].map((star) => (
+                  <button
+                    key={star}
+                    onClick={() => setWrapUpRating(star)}
+                    className="text-2xl transition-transform hover:scale-110 cursor-pointer"
+                  >
+                    {star <= wrapUpRating ? '★' : '☆'}
+                  </button>
+                ))}
+              </div>
+              <textarea
+                value={wrapUpFeedback}
+                onChange={(e) => setWrapUpFeedback(e.target.value)}
+                placeholder="What was the key concept you learned or taught today?"
+                rows={2}
+                className="w-full p-2.5 bg-card-alt border border-border rounded-xl text-xs text-ink outline-none focus:border-amber resize-none"
+              />
+            </div>
+
+            <button
+              onClick={() => onLeave(wrapUpData)}
+              className="w-full py-3 bg-amber hover:bg-terracotta text-white font-semibold text-xs rounded-xl shadow-xs transition-colors cursor-pointer"
+            >
+              Finish & Return to Dashboard →
+            </button>
+          </div>
         </div>
       )}
     </div>
