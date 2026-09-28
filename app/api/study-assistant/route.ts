@@ -13,6 +13,23 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
 const lastInterventionTimes: Record<string, number> = {};
 
 const CONFUSION_PATTERNS = [
+  /@ai/i,
+  /@copilot/i,
+  /hey ai/i,
+  /ask ai/i,
+  /ai help/i,
+  /help me/i,
+  /can you help/i,
+  /pls help/i,
+  /please help/i,
+  /explain/i,
+  /clarify/i,
+  /how to/i,
+  /how do i/i,
+  /why is/i,
+  /why does/i,
+  /what is/i,
+  /what does/i,
   /can'?t understand/i,
   /don'?t get it/i,
   /what do you mean/i,
@@ -20,11 +37,24 @@ const CONFUSION_PATTERNS = [
   /make sense/i,
   /lost/i,
   /hard to follow/i,
-  // Tanglish patterns
+  /stuck/i,
+  /doubt/i,
+  /error/i,
+  /bug/i,
+  /failing/i,
+  /crash/i,
+  /not working/i,
+  /doesn'?t work/i,
+  /memory leak/i,
+  /infinite loop/i,
+  /race condition/i,
+  /undefined/i,
+  // Tanglish & colloquial patterns
   /puriyala/i,
   /theriyala/i,
   /vilangala/i,
   /purila/i,
+  /solli kudu/i,
 ];
 
 export async function POST(req: NextRequest) {
@@ -94,23 +124,27 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // 1. Cost & Spam Control: Maximum 1 intervention per 3 minutes per session
+    // 1. Cost & Spam Control: Fast 10-second debounce for smooth live jury demos (bypass entirely for explicit @ai calls)
     const now = Date.now();
     const lastTime = lastInterventionTimes[sessionId] || 0;
-    const cooldownMs = 3 * 60 * 1000; // 3 minutes
+    const cooldownMs = 10 * 1000; // 10 seconds for seamless presentation flow
 
-    if (now - lastTime < cooldownMs) {
+    const textMessages = Array.isArray(recentMessages) ? recentMessages : [];
+    const last10 = textMessages.slice(-10);
+    const latestMsg = last10[last10.length - 1] || {};
+    const latestText = String(latestMsg.text || '');
+
+    const isDirectAi = /@ai|@copilot|hey ai|ask ai|ai help|ai:/i.test(latestText);
+
+    if (!isDirectAi && now - lastTime < cooldownMs) {
       return NextResponse.json({
         success: true,
         triggered: false,
-        reason: 'Rate limit active (max 1 intervention per 3 minutes)',
+        reason: 'Rate limit active (cooldown)',
       });
     }
 
-    // 2. Cheap local keyword check
-    const textMessages = Array.isArray(recentMessages) ? recentMessages : [];
-    const last10 = textMessages.slice(-10);
-
+    // 2. Local keyword check
     const isConfusionMsg = (text: string) =>
       CONFUSION_PATTERNS.some((pat) => pat.test(text || ''));
 
@@ -127,7 +161,7 @@ export async function POST(req: NextRequest) {
         isConfusionMsg(m.text)
     ).length;
 
-    const anyConfusion = userConfusionCount > 0 || peerConfusionCount > 0;
+    const anyConfusion = isDirectAi || userConfusionCount > 0 || peerConfusionCount > 0;
 
     if (!anyConfusion) {
       return NextResponse.json({
@@ -236,20 +270,40 @@ Return ONLY the concise concept name (1 to 4 words). Do not include formatting, 
       });
     }
 
-    // --- STEP 2: Both users confused about the same concept -> AI teaches both in plain language with a 3-line example ---
-    if (userConfusionCount >= 1 && peerConfusionCount >= 1) {
+    // --- STEP 1: Direct @AI invocation OR Single/Multi-peer confusion -> AI teaches with plain language & 3-line example ---
+    if (isDirectAi || (userConfusionCount >= 1 && peerConfusionCount >= 1) || userConfusionCount >= 1) {
       lastInterventionTimes[sessionId] = now;
 
-      let explanation = `In ${extractedConcept}, the core idea is separating initialization from side effects and cleanup to prevent memory leaks and unexpected state transitions.\n\n\`\`\`js\nuseEffect(() => {\n  const sub = subscribe(id, handler);\n  return () => sub.unsubscribe(); // clean up\n}, [id]);\n\`\`\``;
+      // Tailored high-quality explanations for common curriculum topics
+      const lowerConcept = (extractedConcept || topic || '').toLowerCase();
+      let defaultExplanation = `In ${extractedConcept || topic}, the key design principle is isolating state transitions and managing side effect lifecycles cleanly to guarantee predictable, bug-free execution.`;
+      let defaultCode = `// Clean lifecycle handling\nuseEffect(() => {\n  const handler = () => updateState();\n  window.addEventListener('resize', handler);\n  return () => window.removeEventListener('resize', handler);\n}, []);`;
+
+      if (lowerConcept.includes('effect') || lowerConcept.includes('cleanup') || lowerConcept.includes('leak')) {
+        defaultExplanation = `In React, cleanup functions inside \`useEffect\` execute right before component unmount and before re-running the effect on dependency change. This prevents zombie subscriptions and memory leaks.`;
+        defaultCode = `useEffect(() => {\n  const timer = setInterval(pollMetrics, 1000);\n  return () => clearInterval(timer); // Clean up!\n}, []);`;
+      } else if (lowerConcept.includes('closure') || lowerConcept.includes('scope')) {
+        defaultExplanation = `A closure gives an inner function access to its outer function's scope even after the outer function has returned. In React, beware of stale closures capturing old state variables.`;
+        defaultCode = `function createCounter() {\n  let count = 0;\n  return () => ++count; // Closure encapsulates 'count'\n}`;
+      } else if (lowerConcept.includes('async') || lowerConcept.includes('race') || lowerConcept.includes('fetch')) {
+        defaultExplanation = `Race conditions occur when async operations resolve out of order, overwriting newer UI data with stale network responses. Guard your state updates with a cancel flag or AbortController.`;
+        defaultCode = `useEffect(() => {\n  let active = true;\n  fetchData(id).then(res => { if (active) setData(res); });\n  return () => { active = false; };\n}, [id]);`;
+      } else if (lowerConcept.includes('reducer') || lowerConcept.includes('state')) {
+        defaultExplanation = `\`useReducer\` centralizes state logic into a pure reducer function \`(state, action) => nextState\`. It is ideal when state transitions depend on previous states or involve multiple sub-values.`;
+        defaultCode = `const [state, dispatch] = useReducer((state, action) => {\n  return action.type === 'inc' ? { count: state.count + 1 } : state;\n}, { count: 0 });`;
+      }
+
+      let explanation = `${defaultExplanation}\n\n\`\`\`js\n${defaultCode}\n\`\`\``;
 
       if (process.env.GEMINI_API_KEY) {
         try {
           const prompt = `You are an AI study assistant joining a peer study session.
-Both students are confused about '${extractedConcept}'.
+Student question / confusion: "${latestText}"
+Topic: '${extractedConcept || topic}'.
 Recent chat context:
 ${last10.map((m: any) => `${m.senderName || m.sender}: ${m.text}`).join('\n')}
 
-Provide a clear, plain-language 2-sentence explanation of '${extractedConcept}' followed by ONE concise 3-line code example. Keep it beginner-friendly, concrete, and encouraging.`;
+Provide a crystal-clear, plain-language 2-sentence explanation of '${extractedConcept || topic}' followed by ONE concise 3-line code example. Keep it beginner-friendly, concrete, and directly answering their doubt.`;
 
           const response = await ai.models.generateContent({
             model: 'gemini-2.0-flash',
@@ -267,8 +321,8 @@ Provide a clear, plain-language 2-sentence explanation of '${extractedConcept}' 
       logAgentActivity(
         'StudyAssistant',
         'tier_2_joint_explanation',
-        `Both peers were confused about "${extractedConcept}". Delivered shared plain-language explanation with 3-line example.`,
-        { concept: extractedConcept, topic }
+        `Assisted student with "${extractedConcept || topic}". Delivered targeted plain-language breakdown with practical code sample.`,
+        { concept: extractedConcept, topic, triggeredBy: isDirectAi ? '@ai mention' : 'confusion pattern' }
       );
 
       return NextResponse.json({
@@ -278,11 +332,11 @@ Provide a clear, plain-language 2-sentence explanation of '${extractedConcept}' 
         action: 'teach_both',
         concept: extractedConcept,
         explanation,
-        message: `🤖 **AI Study Assistant**: Both of you seem stuck on **${extractedConcept}**. Let's break it down together:\n\n${explanation}`,
+        message: `🤖 **AI Study Assistant**: Let's clarify **${extractedConcept || topic}**:\n\n${explanation}`,
       });
     }
 
-    // --- STEP 1: Same user confused 3 times in last 10 messages -> Suggest Voice Call ---
+    // --- STEP 2: Repeated confusion signals without resolution -> Suggest Voice Call ---
     if (userConfusionCount >= 3) {
       lastInterventionTimes[sessionId] = now;
 

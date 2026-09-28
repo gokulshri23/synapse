@@ -147,6 +147,7 @@ export default function NativeCallView({
         // Initialize PeerConnection with robust multi-region STUN list
         const pc = new RTCPeerConnection({
           iceServers: [
+            { urls: 'stun:stun.cloudflare.com:3478' },
             { urls: 'stun:stun.l.google.com:19302' },
             { urls: 'stun:stun1.l.google.com:19302' },
             { urls: 'stun:stun2.l.google.com:19302' },
@@ -168,10 +169,13 @@ export default function NativeCallView({
 
           if (remoteVideoRef.current) {
             remoteVideoRef.current.srcObject = remoteStream;
+            remoteVideoRef.current.playsInline = true;
+            remoteVideoRef.current.autoplay = true;
             remoteVideoRef.current.play().catch(() => {});
           }
           if (remoteAudioRef.current) {
             remoteAudioRef.current.srcObject = remoteStream;
+            remoteAudioRef.current.autoplay = true;
             remoteAudioRef.current.play().catch(() => {});
           }
 
@@ -343,7 +347,11 @@ export default function NativeCallView({
       } catch (err) {}
     };
 
-    const interval = setInterval(pollSignals, 1000);
+    // Immediate check right on mount to eliminate the 1s startup delay
+    pollSignals();
+
+    // Fast polling (250ms) for instantaneous WebRTC handshake
+    const interval = setInterval(pollSignals, 250);
     return () => {
       isMounted = false;
       clearInterval(interval);

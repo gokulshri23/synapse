@@ -78,6 +78,7 @@ export default function MatchPage() {
   const [connectToast, setConnectToast] = useState<string | null>(null);
   const [isScanning, setIsScanning] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [showJuryPipelineModal, setShowJuryPipelineModal] = useState(false);
 
   useEffect(() => {
     const channel = supabase
@@ -656,11 +657,35 @@ export default function MatchPage() {
     }
   };
 
-  const isAlreadyConnected = (peerId: string) => {
-    const norm = peerId.trim().toLowerCase();
-    return activeConnections.some(
-      (c) => (c.requesterId || '').toLowerCase() === norm || (c.recipientId || '').toLowerCase() === norm
-    );
+  const isAlreadyConnected = (peerId: string, peerEmail?: string, peerName?: string) => {
+    const normId = (peerId || '').trim().toLowerCase();
+    const normEmail = (peerEmail || '').trim().toLowerCase();
+    const normName = (peerName || '').trim().toLowerCase();
+
+    // Check localStorage active peer
+    try {
+      const savedPeer = localStorage.getItem('synapse_active_peer');
+      if (savedPeer) {
+        const p = JSON.parse(savedPeer);
+        const pId = (p.id || '').trim().toLowerCase();
+        const pName = (p.name || '').trim().toLowerCase();
+        if (pId && (pId === normId || (normEmail && pId === normEmail))) return true;
+        if (pName && normName && pName === normName) return true;
+      }
+    } catch (e) {}
+
+    return activeConnections.some((c) => {
+      const rId = (c.requesterId || '').toLowerCase().trim();
+      const recId = (c.recipientId || '').toLowerCase().trim();
+      const rName = (c.requesterName || '').toLowerCase().trim();
+      const recName = (c.recipientName || '').toLowerCase().trim();
+
+      const idMatch = normId && (rId === normId || recId === normId || rId.includes(normId) || recId.includes(normId));
+      const emailMatch = normEmail && (rId === normEmail || recId === normEmail || rId.includes(normEmail) || recId.includes(normEmail));
+      const nameMatch = normName && (rName === normName || recName === normName);
+
+      return idMatch || emailMatch || nameMatch;
+    });
   };
 
   const isIncomingPending = (peerId: string) => {
@@ -865,7 +890,7 @@ export default function MatchPage() {
       </div>
 
       {/* Autonomous Peer-Matching Agent: Live Activity Loop Header */}
-      <div className="bg-card border border-border rounded-[22px] p-5 sm:p-6 shadow-xs">
+      <div className="bg-card border border-border rounded-[22px] p-5 sm:p-6 shadow-xs space-y-5">
         <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-border">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-amber/10 border border-amber/30 flex items-center justify-center text-xl">
@@ -881,12 +906,20 @@ export default function MatchPage() {
                 </span>
               </div>
               <p className="text-xs text-muted">
-                14-step graph matching • Multi-hop learning chains • 6-factor weighted compatibility
+                4-Phase ODAEA loop • 14-step graph matching • 6-factor weighted compatibility formula
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowJuryPipelineModal(true)}
+              className="px-3.5 py-1.5 bg-amber hover:bg-terracotta text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-xs cursor-pointer active:scale-98"
+            >
+              <span>🎓</span>
+              <span>Explain Architecture to Jury</span>
+            </button>
             <button
               type="button"
               onClick={() => fetchAndMatchPeers(studentEmail, studentName, domain, userLevel)}
@@ -899,34 +932,94 @@ export default function MatchPage() {
           </div>
         </div>
 
-        {/* Live Loop Stage Indicators */}
-        <div className="pt-4">
-          <div className="flex items-center justify-between overflow-x-auto pb-2 gap-2 text-[10px] sm:text-xs font-mono">
-            {[
-              'OBSERVE',
-              'UNDERSTAND',
-              'CLASSIFY',
-              'IDENTIFY GAPS',
-              'SEARCH',
-              'BUILD MATCHES',
-              'EVALUATE NETWORK',
-              'CREATE CONNECTIONS',
-              'EXPLAIN',
-              'MONITOR',
-              'RECLASSIFY',
-              'REMATCH',
-            ].map((step, idx) => (
-              <div key={step} className="flex items-center gap-1.5 shrink-0">
-                <span className="px-2 py-1 bg-amber/10 border border-amber/25 text-amber font-semibold rounded-md">
-                  {idx + 1}. {step}
-                </span>
-                {idx < 11 && <span className="text-muted/60">→</span>}
-              </div>
-            ))}
+        {/* 4 Structured Pipeline Phases (Jury-Ready) */}
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+          {/* Phase 1 */}
+          <div className="p-3.5 rounded-xl bg-card-alt border border-border space-y-1.5">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-mono uppercase tracking-wider font-bold text-amber">Phase 1</span>
+              <span className="w-2 h-2 rounded-full bg-ok" />
+            </div>
+            <h4 className="text-xs font-bold text-ink flex items-center gap-1">
+              <span>👁️</span> Profiling &amp; Observation
+            </h4>
+            <p className="text-[11px] text-muted leading-relaxed">
+              Ingests verified skill declarations, quiz mastery levels, and student learning goals.
+            </p>
+            <div className="pt-1 flex flex-wrap gap-1 text-[9px] font-mono text-muted">
+              <span className="bg-card px-1.5 py-0.5 rounded border border-border">1. OBSERVE</span>
+              <span className="bg-card px-1.5 py-0.5 rounded border border-border">2. UNDERSTAND</span>
+              <span className="bg-card px-1.5 py-0.5 rounded border border-border">3. CLASSIFY</span>
+            </div>
           </div>
 
-          {/* Recent Loop Logs Terminal View */}
-          <div className="mt-3 p-3 bg-card-alt rounded-xl border border-border text-[11px] font-mono space-y-1 max-h-28 overflow-y-auto">
+          {/* Phase 2 */}
+          <div className="p-3.5 rounded-xl bg-card-alt border border-border space-y-1.5">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-mono uppercase tracking-wider font-bold text-amber">Phase 2</span>
+              <span className="w-2 h-2 rounded-full bg-ok" />
+            </div>
+            <h4 className="text-xs font-bold text-ink flex items-center gap-1">
+              <span>🕸️</span> Graph Search &amp; Gaps
+            </h4>
+            <p className="text-[11px] text-muted leading-relaxed">
+              Identifies Zone of Proximal Development (ZPD) and maps complementary teacher-learner edges.
+            </p>
+            <div className="pt-1 flex flex-wrap gap-1 text-[9px] font-mono text-muted">
+              <span className="bg-card px-1.5 py-0.5 rounded border border-border">4. IDENTIFY GAPS</span>
+              <span className="bg-card px-1.5 py-0.5 rounded border border-border">5. SEARCH</span>
+              <span className="bg-card px-1.5 py-0.5 rounded border border-border">6. BUILD MATCHES</span>
+            </div>
+          </div>
+
+          {/* Phase 3 */}
+          <div className="p-3.5 rounded-xl bg-card-alt border border-border space-y-1.5">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-mono uppercase tracking-wider font-bold text-amber">Phase 3</span>
+              <span className="w-2 h-2 rounded-full bg-ok" />
+            </div>
+            <h4 className="text-xs font-bold text-ink flex items-center gap-1">
+              <span>⚖️</span> 6-Factor Compatibility
+            </h4>
+            <p className="text-[11px] text-muted leading-relaxed">
+              Computes weighted score: Skill (30%), ZPD (20%), Urgency (15%), Availability (15%), Style (10%), Value (10%).
+            </p>
+            <div className="pt-1 flex flex-wrap gap-1 text-[9px] font-mono text-muted">
+              <span className="bg-card px-1.5 py-0.5 rounded border border-border">7. EVALUATE</span>
+              <span className="bg-card px-1.5 py-0.5 rounded border border-border">8. CONNECT</span>
+              <span className="bg-card px-1.5 py-0.5 rounded border border-border">9. EXPLAIN</span>
+            </div>
+          </div>
+
+          {/* Phase 4 */}
+          <div className="p-3.5 rounded-xl bg-card-alt border border-border space-y-1.5">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-mono uppercase tracking-wider font-bold text-amber">Phase 4</span>
+              <span className="w-2 h-2 rounded-full bg-ok" />
+            </div>
+            <h4 className="text-xs font-bold text-ink flex items-center gap-1">
+              <span>🔄</span> Feedback &amp; Rematch Loop
+            </h4>
+            <p className="text-[11px] text-muted leading-relaxed">
+              Monitors match health deltas post-session. Triggers autonomous reclassification and adaptive rematching.
+            </p>
+            <div className="pt-1 flex flex-wrap gap-1 text-[9px] font-mono text-muted">
+              <span className="bg-card px-1.5 py-0.5 rounded border border-border">10. MONITOR</span>
+              <span className="bg-card px-1.5 py-0.5 rounded border border-border">11. RECLASSIFY</span>
+              <span className="bg-card px-1.5 py-0.5 rounded border border-border">12. REMATCH</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Live Loop Stage Terminal View */}
+        <div className="pt-1">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[10px] font-mono uppercase font-bold text-muted tracking-wider flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber animate-ping" /> Live Agent Execution Logs
+            </span>
+            <span className="text-[10px] text-muted font-mono">{agentLogs.length} events logged</span>
+          </div>
+          <div className="p-3 bg-card-alt rounded-xl border border-border text-[11px] font-mono space-y-1 max-h-24 overflow-y-auto">
             {agentLogs.length === 0 ? (
               <p className="text-muted">Agent initializing observation phase...</p>
             ) : (
@@ -1077,44 +1170,136 @@ export default function MatchPage() {
             </div>
 
             {/* TAB 1: Matched Peers Content */}
-            {activeTab === 'matches' && (
-              <div>
-                {agentMatches.length === 0 ? (
-                  /* Step 11: Honest Dead-End State */
-                  <div className="p-8 rounded-2xl border-2 border-dashed border-border bg-card-alt flex flex-col items-center text-center gap-3 animate-fade-in my-2">
-                    <span className="text-3xl">📡</span>
-                    <h3 className="text-base font-serif font-bold text-ink">No Suitable Peer Currently Available</h3>
-                    <p className="text-xs text-muted max-w-md leading-relaxed">
-                      {emptyStateReason ||
-                        "No peer currently matches your exact skill gap and target proficiency. We've queued your profile and will pair you the moment a suitable peer joins."}
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => fetchAndMatchPeers(studentEmail, studentName, domain, userLevel)}
-                      className="mt-2 px-4 py-2 bg-amber hover:bg-terracotta text-white text-xs font-bold rounded-xl shadow-xs transition-all cursor-pointer flex items-center gap-2"
-                    >
-                      <span>🔄</span>
-                      <span>Scan Network Again</span>
-                    </button>
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    {agentMatches.map((match) => {
-                      const isConnected = isAlreadyConnected(match.peerId);
-                      const isPending = !!pendingOutgoing[match.peerId];
-                      const isExpanded = !!expandedBreakdown[match.matchId];
+            {activeTab === 'matches' && (() => {
+              const connectedMatches = agentMatches.filter((m) =>
+                isAlreadyConnected(m.peerId, (m as any).email, m.peerName)
+              );
+              const candidateMatches = agentMatches.filter(
+                (m) => !isAlreadyConnected(m.peerId, (m as any).email, m.peerName)
+              );
 
-                      return (
-                        <div
-                          key={match.matchId}
-                          className={`p-5 rounded-2xl border transition-all flex flex-col justify-between ${
-                            isConnected
-                              ? 'border-ok/40 bg-ok/5'
-                              : isPending
-                              ? 'border-amber/40 bg-amber/5'
-                              : 'border-border bg-card-alt hover:border-amber/60 hover:shadow-xs'
-                          }`}
+              return (
+                <div className="space-y-6">
+                  {/* Connected Learning Partners (No Connect Button Here Ever) */}
+                  {connectedMatches.length > 0 && (
+                    <div className="p-4 sm:p-5 rounded-2xl bg-ok/10 border border-ok/30 space-y-3 animate-fade-in">
+                      <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-ok/20">
+                        <div className="flex items-center gap-2">
+                          <span className="text-lg">🤝</span>
+                          <h3 className="text-sm font-serif font-bold text-ink">
+                            Your Connected Learning Partners ({connectedMatches.length})
+                          </h3>
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-ok/25 text-ok font-bold uppercase tracking-wider">
+                            Connected ✓
+                          </span>
+                        </div>
+                        <span className="text-[11px] text-muted font-medium">Already connected — ready for 1-on-1 collaborative pairing</span>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                        {connectedMatches.map((match) => (
+                          <div
+                            key={'conn_' + match.matchId}
+                            className="p-3.5 rounded-xl bg-card border border-ok/30 flex items-center justify-between gap-3 shadow-xs hover:border-ok transition-colors"
+                          >
+                            <div className="flex items-center gap-3 min-w-0">
+                              <div className="w-10 h-10 rounded-full bg-gradient-to-br from-ok to-emerald-600 text-white flex items-center justify-center font-bold text-xs shadow-xs shrink-0">
+                                {match.peerName
+                                  .split(' ')
+                                  .map((n) => n[0])
+                                  .join('')
+                                  .slice(0, 2)}
+                              </div>
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <h4 className="font-semibold text-ink text-xs truncate">{match.peerName}</h4>
+                                  <span className="text-[9px] px-1.5 py-0.2 bg-ok/15 text-ok font-bold rounded">
+                                    {match.peerRole}
+                                  </span>
+                                </div>
+                                <p className="text-[10px] text-muted truncate">{match.primarySkill} • {match.score}% Fit</p>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleOpenInPageChat({
+                                    id: match.peerId,
+                                    name: match.peerName,
+                                    role: match.peerRole,
+                                    skill: match.primarySkill,
+                                    score: match.score,
+                                  })
+                                }
+                                className="py-1.5 px-2.5 bg-card-alt hover:bg-card border border-border text-ink rounded-lg text-xs font-semibold cursor-pointer"
+                              >
+                                💬 Chat
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleOpenChat(match.peerName, match.peerId, match.primarySkill)}
+                                className="py-1.5 px-3 bg-amber hover:bg-terracotta text-white rounded-lg text-xs font-bold shadow-xs cursor-pointer"
+                              >
+                                Open Session →
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Candidate Peer Matches Available for Pairing */}
+                  <div>
+                    <div className="flex items-center justify-between mb-3 px-1">
+                      <h3 className="text-xs font-serif font-bold uppercase tracking-wider text-muted flex items-center gap-1.5">
+                        <span>🎯</span> Candidate Matches ({candidateMatches.length})
+                      </h3>
+                      <span className="text-[11px] text-muted">Ranked by 6-Factor Autonomous Compatibility</span>
+                    </div>
+
+                    {candidateMatches.length === 0 ? (
+                      /* Step 11: Honest Dead-End State */
+                      <div className="p-8 rounded-2xl border-2 border-dashed border-border bg-card-alt flex flex-col items-center text-center gap-3 animate-fade-in my-2">
+                        <span className="text-3xl">📡</span>
+                        <h3 className="text-base font-serif font-bold text-ink">
+                          {connectedMatches.length > 0 ? 'All Active Matches Connected' : 'No Suitable Peer Currently Available'}
+                        </h3>
+                        <p className="text-xs text-muted max-w-md leading-relaxed">
+                          {connectedMatches.length > 0
+                            ? 'All discovered peers in this cycle are already in your active learning network! You can start a live collaborative session with your partners above or re-scan for new members.'
+                            : emptyStateReason ||
+                              "No peer currently matches your exact skill gap and target proficiency. We've queued your profile and will pair you the moment a suitable peer joins."}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => fetchAndMatchPeers(studentEmail, studentName, domain, userLevel)}
+                          className="mt-2 px-4 py-2 bg-amber hover:bg-terracotta text-white text-xs font-bold rounded-xl shadow-xs transition-all cursor-pointer flex items-center gap-2"
                         >
+                          <span>🔄</span>
+                          <span>Scan Network Again</span>
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        {candidateMatches.map((match) => {
+                          const isConnected = isAlreadyConnected(match.peerId, (match as any).email, match.peerName);
+                          const isPending = !!pendingOutgoing[match.peerId];
+                          const isExpanded = !!expandedBreakdown[match.matchId];
+
+                          return (
+                            <div
+                              key={match.matchId}
+                              className={`p-5 rounded-2xl border transition-all flex flex-col justify-between ${
+                                isConnected
+                                  ? 'border-ok/40 bg-ok/5'
+                                  : isPending
+                                  ? 'border-amber/40 bg-amber/5'
+                                  : 'border-border bg-card-alt hover:border-amber/60 hover:shadow-xs'
+                              }`}
+                            >
                           <div>
                             {/* Peer Header */}
                             <div className="flex justify-between items-start mb-3">
@@ -1370,10 +1555,12 @@ export default function MatchPage() {
                         </div>
                       );
                     })}
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
-            )}
+                </div>
+              );
+            })()}
 
             {/* TAB 2: Connection Requests Content */}
             {activeTab === 'requests' && (
@@ -1611,6 +1798,106 @@ export default function MatchPage() {
               Send
             </button>
           </form>
+        </div>
+      )}
+
+      {/* ======================================================== */}
+      {/* JURY ARCHITECTURE & ACTIVE PIPELINE EXPLANATION MODAL     */}
+      {/* ======================================================== */}
+      {showJuryPipelineModal && (
+        <div className="fixed inset-0 z-[120] bg-black/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-6 animate-fade-in">
+          <div className="bg-card border border-border rounded-3xl max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6 sm:p-7 shadow-2xl space-y-5">
+            <div className="flex items-center justify-between pb-3 border-b border-border">
+              <div className="flex items-center gap-3">
+                <span className="text-3xl">🎓</span>
+                <div>
+                  <h3 className="font-serif font-bold text-lg text-ink">
+                    Autonomous Peer-Matching Agent Architecture
+                  </h3>
+                  <p className="text-xs text-muted">Jury Presentation Guide &amp; Technical Breakdown</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowJuryPipelineModal(false)}
+                className="w-8 h-8 rounded-full bg-card-alt border border-border text-muted hover:text-ink flex items-center justify-center text-sm font-bold cursor-pointer transition-colors"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Quick 30-Second Elevator Pitch */}
+            <div className="p-4 rounded-2xl bg-amber/10 border border-amber/30 space-y-1.5">
+              <h4 className="text-xs font-bold uppercase tracking-wider text-amber">
+                🎯 30-Second Pitch to the Judges:
+              </h4>
+              <p className="text-xs text-ink leading-relaxed font-serif">
+                &ldquo;Synapse does not rely on static directory lists or random roulette pairing. We built an autonomous 4-phase ODAEA agent loop that ingests real proctored quiz mastery, maps Zone of Proximal Development (ZPD) skill gaps in an empirical graph, evaluates pairs across a 6-factor weighted compatibility formula, and autonomously monitors match health deltas to trigger remediation rematching when needed.&rdquo;
+              </p>
+            </div>
+
+            {/* 4 Architectural Phases Detailed */}
+            <div className="space-y-3">
+              <h4 className="text-xs font-bold uppercase tracking-wider text-muted">
+                The 4 Architectural Phases:
+              </h4>
+
+              <div className="p-3.5 rounded-xl bg-card-alt border border-border space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-ink">1. Observation &amp; Skill Profiling</span>
+                  <span className="text-[10px] font-mono text-amber font-bold">ODAEA Steps 1–3</span>
+                </div>
+                <p className="text-xs text-muted leading-relaxed">
+                  Ingests verified skill declarations, proctored quiz scores, and learning goals. Classifies users into Certified Teachers (Level &ge; 3), Peer Helpers (Level 2), or Learners.
+                </p>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-card-alt border border-border space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-ink">2. Graph Search &amp; ZPD Gap Analysis</span>
+                  <span className="text-[10px] font-mono text-amber font-bold">ODAEA Steps 4–6</span>
+                </div>
+                <p className="text-xs text-muted leading-relaxed">
+                  Calculates the Zone of Proximal Development. An optimal match occurs when the Teacher is exactly 1–2 levels ahead of the Learner, maximizing peer scaffolding while preventing cognitive overload.
+                </p>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-card-alt border border-border space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-ink">3. The 6-Factor Weighted Compatibility Formula</span>
+                  <span className="text-[10px] font-mono text-amber font-bold">ODAEA Steps 7–9</span>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-1 font-mono text-[11px]">
+                  <span className="bg-card p-1.5 rounded border border-border text-center">🎯 Skill Fit: 30%</span>
+                  <span className="bg-card p-1.5 rounded border border-border text-center">📈 ZPD Delta: 20%</span>
+                  <span className="bg-card p-1.5 rounded border border-border text-center">⚡ Need Urgency: 15%</span>
+                  <span className="bg-card p-1.5 rounded border border-border text-center">⏰ Availability: 15%</span>
+                  <span className="bg-card p-1.5 rounded border border-border text-center">🧠 Style Fit: 10%</span>
+                  <span className="bg-card p-1.5 rounded border border-border text-center">🌐 Network Value: 10%</span>
+                </div>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-card-alt border border-border space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-ink">4. Autonomous Feedback &amp; Rematch Loop</span>
+                  <span className="text-[10px] font-mono text-amber font-bold">ODAEA Steps 10–12</span>
+                </div>
+                <p className="text-xs text-muted leading-relaxed">
+                  Post-session quizzes calculate empirical score delta ($post\_score - pre\_score$). If delta is low across 2 consecutive sessions, Match Health alerts the agent to autonomously reclassify and suggest a new peer match.
+                </p>
+              </div>
+            </div>
+
+            <div className="pt-2 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowJuryPipelineModal(false)}
+                className="px-5 py-2.5 bg-amber hover:bg-terracotta text-white font-bold text-xs rounded-xl shadow-xs transition-all cursor-pointer"
+              >
+                Close Walkthrough
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

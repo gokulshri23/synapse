@@ -141,9 +141,21 @@ export default function SessionsPage() {
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
     if (typeof window !== 'undefined') {
       try {
-        const last = localStorage.getItem('synapse_last_chat_messages');
-        if (last) {
-          const parsed = JSON.parse(last);
+        const myKey = (localStorage.getItem('synapse_user_email') || localStorage.getItem('synapse_user_name') || 'user').trim().toLowerCase();
+        let peerKey = 'peer';
+        const savedPeer = localStorage.getItem('synapse_active_peer');
+        if (savedPeer) {
+          try {
+            const p = JSON.parse(savedPeer);
+            peerKey = (p.id || p.name || 'peer').trim().toLowerCase();
+          } catch (e) {}
+        }
+        const pairKey = 'synapse_chat_pair_' + [myKey, peerKey].sort().join('__');
+        const cached =
+          localStorage.getItem(pairKey) ||
+          localStorage.getItem('synapse_last_chat_messages');
+        if (cached) {
+          const parsed = JSON.parse(cached);
           if (Array.isArray(parsed) && parsed.length > 0) return parsed;
         }
       } catch (e) {}
@@ -426,9 +438,13 @@ function useAsync(asyncFn) {
         if (currentThreadId) {
           localStorage.setItem('synapse_chat_' + currentThreadId, JSON.stringify(messages));
         }
+        const myKey = (studentEmail || studentName || 'user').trim().toLowerCase();
+        const peerKey = (activePeer.id || activePeer.name || 'peer').trim().toLowerCase();
+        const pairKey = 'synapse_chat_pair_' + [myKey, peerKey].sort().join('__');
+        localStorage.setItem(pairKey, JSON.stringify(messages));
       } catch (e) {}
     }
-  }, [messages, currentThreadId]);
+  }, [messages, currentThreadId, studentEmail, studentName, activePeer.id, activePeer.name]);
 
   const fetchThreadMessages = useCallback(async (tId: string) => {
     if (!tId) return;
@@ -436,7 +452,13 @@ function useAsync(asyncFn) {
     // Immediately restore cached thread messages if state is currently empty
     if (typeof window !== 'undefined') {
       try {
-        const cached = localStorage.getItem('synapse_chat_' + tId) || localStorage.getItem('synapse_last_chat_messages');
+        const myKey = (studentEmail || studentName || 'user').trim().toLowerCase();
+        const peerKey = (activePeer.id || activePeer.name || 'peer').trim().toLowerCase();
+        const pairKey = 'synapse_chat_pair_' + [myKey, peerKey].sort().join('__');
+        const cached =
+          localStorage.getItem('synapse_chat_' + tId) ||
+          localStorage.getItem(pairKey) ||
+          localStorage.getItem('synapse_last_chat_messages');
         if (cached) {
           const parsed = JSON.parse(cached);
           if (Array.isArray(parsed) && parsed.length > 0) {
@@ -464,12 +486,20 @@ function useAsync(asyncFn) {
             flagged: m.flagged || false,
             status: 'sent' as const,
           }));
-          setMessages(loaded);
+
+          setMessages((prev) => {
+            if (prev.length === 0) return loaded;
+            // Merge deduplicated by message id or content
+            const existingIds = new Set(prev.map((p) => p.id));
+            const newOnes = loaded.filter((l) => !existingIds.has(l.id));
+            if (newOnes.length === 0) return prev;
+            return [...prev, ...newOnes];
+          });
           setTimeout(() => scrollToBottom(true), 60);
         }
       }
     } catch (e) {}
-  }, [studentEmail, studentName, scrollToBottom]);
+  }, [studentEmail, studentName, activePeer.id, activePeer.name, scrollToBottom]);
 
   useEffect(() => {
     if (!currentThreadId) return;
@@ -2226,6 +2256,31 @@ function useAsync(asyncFn) {
                 {'\u2193'} New messages
               </button>
             )}
+
+            {/* Quick AI & Help Prompts for Live Demos & Fast Intervention */}
+            <div className="px-3 py-1.5 bg-card border-t border-border flex items-center gap-1.5 overflow-x-auto text-[11px] shrink-0">
+              <span className="text-muted text-[10px] font-bold uppercase tracking-wider shrink-0 flex items-center gap-1">
+                <span>🤖</span>
+                <span>Ask AI:</span>
+              </span>
+              {[
+                '@ai explain useEffect cleanup',
+                '@ai how to fix race condition?',
+                '@ai what is a closure?',
+                '@ai compare useState vs useReducer',
+                "I'm confused about async error handling",
+              ].map((promptText, idx) => (
+                <button
+                  key={idx}
+                  type="button"
+                  onClick={() => setInput(promptText)}
+                  className="px-2.5 py-0.5 rounded-full bg-amber/10 hover:bg-amber/20 text-amber font-medium border border-amber/20 shrink-0 transition-colors cursor-pointer text-[11px]"
+                  title="Click to insert prompt"
+                >
+                  {promptText}
+                </button>
+              ))}
+            </div>
 
             {/* Message Input */}
             <form onSubmit={handleSendMessage} className="p-3 border-t border-border bg-card-alt flex gap-2 shrink-0">
