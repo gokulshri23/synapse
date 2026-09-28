@@ -1148,24 +1148,22 @@ function useAsync(asyncFn) {
   }, [showVideoModal, isVideoEnded]);
 
   const triggerStudyAssistantCheck = async (recentMsgs: ChatMessage[]) => {
-    // Student controls: check session toggle and 10-minute cooldown
+    // Student controls: check session toggle and cooldown
     if (assistantDisabledForSession) return;
     if (Date.now() < assistantSuppressedUntil) return;
 
-    // Guard 1: Need at least 3 messages before AI assistant can trigger
-    const userMsgs = recentMsgs.filter((m) => m.sender === 'me');
-    if (userMsgs.length < 3) return;
+    if (!recentMsgs || recentMsgs.length === 0) return;
+    const latestMsg = recentMsgs[recentMsgs.length - 1];
+    if (!latestMsg || latestMsg.type === 'study_assistant' || latestMsg.type === 'ai_rephrase') return;
 
-    // Guard 2: Latest message must be at least 10 characters (not random keysmash)
-    const latestUserMsg = userMsgs[userMsgs.length - 1];
-    if (!latestUserMsg || (latestUserMsg.text || '').trim().length < 10) return;
+    const latestText = (latestMsg.text || '').trim();
+    if (latestText.length < 2) return;
 
-    // Guard 3: Detect gibberish — if latest message has 4+ consonants in a row (no vowels/spaces), skip
+    // Detect gibberish — if latest message has 5+ consonants in a row (no vowels/spaces), skip
     const gibberishPattern = /[^aeiou\s\d.,!?@#]{5,}/i;
-    const latestText = (latestUserMsg.text || '').trim();
     const words = latestText.split(/\s+/);
     const gibberishWords = words.filter((w) => gibberishPattern.test(w));
-    if (gibberishWords.length > words.length * 0.5) return; // More than 50% gibberish words = skip
+    if (words.length > 1 && gibberishWords.length > words.length * 0.5) return;
 
     try {
       const sId = getSessionId();
@@ -1181,35 +1179,36 @@ function useAsync(asyncFn) {
       });
       if (res.ok) {
         const data = await res.json();
-        if (data.triggered) {
-          if (data.tier === 1) {
-            setTier1VoicePrompt(data.message);
-          } else if (data.tier === 2) {
-            setMessages(prev => [
-              ...prev,
-              {
-                id: 'sa_tier2_' + Date.now(),
-                text: data.message,
-                sender: 'peer',
-                time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                senderName: '\u{1F916} AI Study Assistant',
-                type: 'study_assistant',
-              }
-            ]);
-            showToast('🤖 AI Study Assistant joined the chat with a joint concept breakdown.');
-          } else if (data.tier === 3) {
-            setTier3Video({
-              id: data.video.id,
-              youtubeId: data.video.youtubeId,
-              title: data.video.title,
-              postQuiz: data.postQuiz || [],
-              message: data.message
-            });
-            setVideoWatchSeconds(0);
-            setIsVideoEnded(false);
-            setVideoWatched(false);
-            setShowVideoModal(true);
-            setVideoQuizAnswers(new Array((data.postQuiz || []).length).fill(-1));
+        if (data.triggered && data.confusionDetected) {
+          const aiMsg: ChatMessage = {
+            id: 'sa_' + Date.now(),
+            text: data.explanation || data.message || '',
+            sender: 'peer',
+            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            senderName: '🤖 AI Learning Assistant',
+            type: 'study_assistant',
+            aiAction: data.action,
+            aiStage: data.confusionCount,
+            concept: data.concept,
+            videoData: data.video || undefined,
+            thread_id: sId,
+          };
+
+          setMessages(prev => {
+            if (prev.some(p => p.text === aiMsg.text && p.type === 'study_assistant')) {
+              return prev;
+            }
+            return [...prev, aiMsg];
+          });
+
+          if (data.confusionCount === 1) {
+            showToast('🤖 AI Learning Assistant: Concept clarification posted.');
+          } else if (data.confusionCount === 2) {
+            showToast('🤖 AI Learning Assistant: Simpler analogy & check posted.');
+          } else if (data.confusionCount === 3) {
+            showToast('🎥 AI Learning Assistant: Recommended video tutorial.');
+          } else if (data.confusionCount === 4) {
+            showToast('📞 AI Learning Assistant: Suggested voice/video call with peer.');
           }
         }
       }

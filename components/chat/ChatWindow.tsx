@@ -15,6 +15,14 @@ export interface ChatMessage {
   flagged?: boolean;
   status?: 'sending' | 'sent' | 'failed';
   thread_id?: string;
+  aiAction?: 'NONE' | 'EXPLAIN' | 'EXPLAIN_DIFFERENTLY' | 'RECOMMEND_YOUTUBE' | 'RECOMMEND_CALL';
+  aiStage?: number;
+  concept?: string;
+  videoData?: {
+    id?: string;
+    youtubeId: string;
+    title: string;
+  };
 }
 
 export interface ChatWindowProps {
@@ -49,6 +57,83 @@ export interface ChatWindowProps {
   tier1VoicePrompt?: string | null;
   setTier1VoicePrompt?: (val: string | null) => void;
   setAssistantSuppressedUntil?: (val: number) => void;
+}
+
+const CONFUSION_PATTERNS = [
+  /don'?t\s+understand/i,
+  /don'?t\s+get\s+it/i,
+  /confus(?:ed|ing)/i,
+  /what\s+does\s+(?:that|this)\s+mean/i,
+  /how\s+does\s+(?:that|this)\s+work/i,
+  /what\s+do\s+you\s+mean/i,
+  /can\s+you\s+explain/i,
+  /can\s+you\s+clarify/i,
+  /hard\s+to\s+follow/i,
+  /i'?m\s+lost/i,
+  /i'?m\s+stuck/i,
+  /not\s+clear/i,
+  /still\s+don'?t/i,
+  /still\s+confused/i,
+  /explain\s+differently/i,
+  /explain\s+again/i,
+  /need\s+(?:a\s+)?video/i,
+  /video\s+didn'?t\s+help/i,
+  /puriyala/i,
+  /vilangala/i,
+  /innum\s+purila/i,
+  /@ai/i,
+  /hey\s+ai/i,
+  /ai\s+help/i,
+];
+
+function parseChatMessagePayload(rawContent: string, rawType?: string) {
+  let text = rawContent || '';
+  let videoData: { id?: string; youtubeId: string; title: string } | undefined = undefined;
+  let aiAction: 'NONE' | 'EXPLAIN' | 'EXPLAIN_DIFFERENTLY' | 'RECOMMEND_YOUTUBE' | 'RECOMMEND_CALL' | undefined = undefined;
+  let aiStage: number | undefined = undefined;
+  let concept: string | undefined = undefined;
+
+  if (rawType === 'study_assistant' && text.startsWith('{') && text.endsWith('}')) {
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed.explanation || parsed.message) {
+        text = parsed.explanation || parsed.message;
+        videoData = parsed.video || undefined;
+        aiAction = parsed.action;
+        aiStage = parsed.confusionCount || parsed.stage || (parsed.video ? 3 : undefined);
+        concept = parsed.concept;
+      }
+    } catch (e) {}
+  }
+
+  if (!videoData) {
+    const ytMatch = text.match(/(?:youtube\.com\/(?:watch\?v=|embed\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+    if (ytMatch) {
+      videoData = {
+        youtubeId: ytMatch[1],
+        title: 'Recommended Learning Video',
+      };
+      if (!aiStage && rawType === 'study_assistant') {
+        aiStage = 3;
+        aiAction = 'RECOMMEND_YOUTUBE';
+      }
+    }
+  }
+
+  if (rawType === 'study_assistant' && !aiStage) {
+    if (text.includes('explain this directly with your peer') || text.includes('voice or video call')) {
+      aiStage = 4;
+      aiAction = 'RECOMMEND_CALL';
+    } else if (text.includes('Quick Check:') || text.includes('GPS') || text.includes('analogy') || text.includes('simpler')) {
+      aiStage = 2;
+      aiAction = 'EXPLAIN_DIFFERENTLY';
+    } else {
+      aiStage = 1;
+      aiAction = 'EXPLAIN';
+    }
+  }
+
+  return { text, videoData, aiAction, aiStage, concept };
 }
 
 export default function ChatWindow({
@@ -142,19 +227,29 @@ export default function ChatWindow({
           const myEmailLower = (studentEmail || studentName || '').trim().toLowerCase();
           const loaded: ChatMessage[] = data.messages
             .filter((m: any) => !m.thread_id || m.thread_id === threadId)
-            .map((m: any) => ({
-              id: m.id,
-              text: m.content || m.text || '',
-              sender: (m.sender_email || m.senderId || '').trim().toLowerCase() === myEmailLower ? ('me' as const) : ('peer' as const),
-              time: m.created_at ? new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Now',
-              senderName: m.sender_name || m.senderName,
-              type: m.type || 'text',
-              voiceDataUrl: m.voice_url || m.voiceDataUrl,
-              reactions: m.reactions || [],
-              flagged: m.flagged || false,
-              status: 'sent' as const,
-              thread_id: m.thread_id || threadId,
-            }));
+            .map((m: any) => {
+              const { text, videoData, aiAction, aiStage, concept } = parseChatMessagePayload(
+                m.content || m.text || '',
+                m.type
+              );
+              return {
+                id: m.id,
+                text,
+                sender: (m.sender_email || m.senderId || '').trim().toLowerCase() === myEmailLower ? ('me' as const) : ('peer' as const),
+                time: m.created_at ? new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Now',
+                senderName: m.sender_name || m.senderName,
+                type: m.type || 'text',
+                voiceDataUrl: m.voice_url || m.voiceDataUrl,
+                reactions: m.reactions || [],
+                flagged: m.flagged || false,
+                status: 'sent' as const,
+                thread_id: m.thread_id || threadId,
+                videoData,
+                aiAction,
+                aiStage,
+                concept,
+              };
+            });
 
           setMessages((prev) => {
             if (prev.length === 0) return loaded;
@@ -199,9 +294,13 @@ export default function ChatWindow({
             const existingIdx = prev.findIndex(
               (ex) => ex.id === m.id || (isFromMe && ex.status === 'sending' && ex.text === m.content)
             );
+            const { text, videoData, aiAction, aiStage, concept } = parseChatMessagePayload(
+              m.content || '',
+              m.type
+            );
             const formatted: ChatMessage = {
               id: m.id,
-              text: m.content || '',
+              text,
               sender: isFromMe ? ('me' as const) : ('peer' as const),
               time: m.created_at ? new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Now',
               senderName: m.sender_name || (isFromMe ? studentName : activePeer.name),
@@ -211,6 +310,10 @@ export default function ChatWindow({
               flagged: false,
               status: 'sent' as const,
               thread_id: threadId,
+              videoData,
+              aiAction,
+              aiStage,
+              concept,
             };
 
             if (existingIdx !== -1) {
@@ -230,6 +333,92 @@ export default function ChatWindow({
       supabase.removeChannel(channel);
     };
   }, [threadId, fetchMessages, studentEmail, studentName, activePeer.name, scrollToBottom]);
+
+  // ─── In-Chat AI Study Assistant Escalation Trigger ─────────────
+  const runStudyAssistant = useCallback(
+    async (currentMsgs: ChatMessage[]) => {
+      if (assistantDisabledForSession) return;
+      if (Date.now() < assistantSuppressedUntil) return;
+
+      const latest = currentMsgs[currentMsgs.length - 1];
+      if (!latest) return;
+      const text = (latest.text || '').trim();
+      if (text.length < 2) return;
+
+      // Don't trigger on AI messages themselves
+      if (latest.type === 'study_assistant' || latest.type === 'ai_rephrase') return;
+
+      const hasConfusion = CONFUSION_PATTERNS.some((p) => p.test(text));
+      const isDirectAi = /@ai|@copilot|hey ai|ask ai|ai help|ai:/i.test(text);
+
+      if (!hasConfusion && !isDirectAi) return;
+
+      try {
+        const res = await fetch('/api/study-assistant', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sessionId: threadId,
+            topic: studentTrack,
+            recentMessages: currentMsgs.slice(-10),
+            senderId: studentEmail || studentName,
+          }),
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          if (data.triggered && data.confusionDetected) {
+            const aiMsg: ChatMessage = {
+              id: 'sa_' + Date.now(),
+              text: data.explanation || data.message || '',
+              sender: 'peer',
+              time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              senderName: '🤖 AI Learning Assistant',
+              type: 'study_assistant',
+              aiAction: data.action,
+              aiStage: data.confusionCount,
+              concept: data.concept,
+              videoData: data.video || undefined,
+              thread_id: threadId,
+            };
+
+            setMessages((prev) => {
+              if (prev.some((p) => p.text === aiMsg.text && p.type === 'study_assistant')) {
+                return prev;
+              }
+              return [...prev, aiMsg];
+            });
+            setTimeout(() => scrollToBottom(true), 60);
+
+            // Persist to messages table so peer sees it in real time
+            try {
+              await fetch('/api/messages', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  threadId,
+                  threadType,
+                  content: JSON.stringify({
+                    explanation: data.explanation || data.message,
+                    action: data.action,
+                    confusionCount: data.confusionCount,
+                    concept: data.concept,
+                    video: data.video,
+                  }),
+                  senderName: '🤖 AI Learning Assistant',
+                  senderEmail: 'ai_assistant@synapse.edu',
+                  type: 'study_assistant',
+                }),
+              });
+            } catch (e) {}
+          }
+        }
+      } catch (err) {
+        console.warn('Study assistant execution failed:', err);
+      }
+    },
+    [threadId, threadType, studentTrack, studentEmail, studentName, assistantDisabledForSession, assistantSuppressedUntil, scrollToBottom]
+  );
 
   // ─── Send Message (Optimistic + Isolated POST) ─────────────────
   const handleSendMessage = async (e?: React.FormEvent, retryMsg?: ChatMessage) => {
@@ -297,9 +486,11 @@ export default function ChatWindow({
       );
     }
 
-    // Trigger study assistant check if available
+    // Trigger study assistant check
+    const updatedMessagesList = [...messages, optimisticMsg];
+    runStudyAssistant(updatedMessagesList);
     if (triggerStudyAssistantCheck) {
-      triggerStudyAssistantCheck([...messages, optimisticMsg]);
+      triggerStudyAssistantCheck(updatedMessagesList);
     }
 
     // Handle AI peer automated replies strictly for explicit AI Peer Tutor sessions
@@ -497,6 +688,7 @@ export default function ChatWindow({
       });
     } catch (e) {}
 
+    runStudyAssistant(updated);
     if (triggerStudyAssistantCheck) {
       triggerStudyAssistantCheck(updated);
     }
@@ -522,10 +714,10 @@ export default function ChatWindow({
     return (
       <div
         key={m.id}
-        className={'flex flex-col max-w-[85%] group ' + (isMe ? 'items-end ml-auto' : 'items-start mr-auto')}
+        className={'flex flex-col max-w-[88%] group ' + (isMe ? 'items-end ml-auto' : 'items-start mr-auto')}
       >
         <span className="text-[10px] text-muted mb-1 px-1 flex items-center gap-1.5">
-          {isAI ? m.senderName : isMe ? studentName : m.senderName || activePeer.name} • {m.time}
+          {isAI ? m.senderName || '🤖 AI Learning Assistant' : isMe ? studentName : m.senderName || activePeer.name} • {m.time}
           {isMe && m.status === 'sending' && (
             <span className="text-[9px] text-amber animate-pulse">sending...</span>
           )}
@@ -535,7 +727,7 @@ export default function ChatWindow({
           className={
             'relative p-3.5 rounded-2xl text-xs sm:text-sm leading-relaxed shadow-xs ' +
             (isAI
-              ? 'bg-gradient-to-br from-blue-50 to-indigo-50 dark:from-blue-950/30 dark:to-indigo-950/30 border border-blue-200/50 dark:border-blue-800/30 text-ink rounded-bl-xs'
+              ? 'bg-gradient-to-br from-blue-50/90 to-indigo-50/90 dark:from-blue-950/40 dark:to-indigo-950/40 border border-blue-200/70 dark:border-blue-800/40 text-ink rounded-bl-xs w-full max-w-lg'
               : isMe
               ? m.status === 'failed'
                 ? 'bg-bad/10 border border-bad text-ink rounded-br-xs font-medium'
@@ -544,13 +736,21 @@ export default function ChatWindow({
           }
         >
           {isAI && (
-            <span className="text-[10px] text-blue-500 font-bold uppercase tracking-wider block mb-1">
-              {m.type === 'ai_rephrase'
-                ? '🤖 Simpler Explanation'
-                : m.type === 'study_assistant'
-                ? '🤖 AI Study Assistant Co-Pilot'
-                : '🤖 AI Tutor Help'}
-            </span>
+            <div className="flex items-center gap-1.5 mb-1.5 pb-1 border-b border-blue-200/40 dark:border-blue-800/30">
+              <span className="text-[10px] text-blue-600 dark:text-blue-400 font-bold uppercase tracking-wider">
+                {m.aiStage === 1
+                  ? '🤖 AI Learning Assistant • Concept Clarification'
+                  : m.aiStage === 2
+                  ? '🤖 AI Learning Assistant • Simpler Analogy & Check'
+                  : m.aiStage === 3
+                  ? '🤖 AI Learning Assistant • Video Recommendation'
+                  : m.aiStage === 4
+                  ? '🤖 AI Learning Assistant • Live Peer Collaboration'
+                  : m.type === 'ai_rephrase'
+                  ? '🤖 Simpler Explanation'
+                  : '🤖 AI Learning Assistant'}
+              </span>
+            </div>
           )}
 
           {isVoice && m.voiceDataUrl ? (
@@ -559,7 +759,55 @@ export default function ChatWindow({
               <audio controls src={m.voiceDataUrl} className="h-8 max-w-[200px]" preload="metadata" />
             </div>
           ) : (
-            <span className="whitespace-pre-wrap">{m.text}</span>
+            <div className="whitespace-pre-wrap leading-relaxed">{m.text}</div>
+          )}
+
+          {/* Inline Embedded YouTube Video for Stage 3 */}
+          {(m.aiStage === 3 || m.aiAction === 'RECOMMEND_YOUTUBE' || m.videoData) && m.videoData && (
+            <div className="mt-3 rounded-xl overflow-hidden border border-border/80 bg-black/90 shadow-md">
+              <div className="relative w-full aspect-video">
+                <iframe
+                  src={`https://www.youtube-nocookie.com/embed/${m.videoData.youtubeId}?rel=0`}
+                  title={m.videoData.title}
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                  allowFullScreen
+                  className="w-full h-full border-0"
+                />
+              </div>
+              <div className="p-2.5 bg-card flex items-center justify-between text-xs">
+                <span className="font-semibold text-ink line-clamp-1">{m.videoData.title}</span>
+                <a
+                  href={`https://www.youtube.com/watch?v=${m.videoData.youtubeId}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[11px] text-amber hover:underline shrink-0 ml-2 font-medium"
+                >
+                  Open ↗
+                </a>
+              </div>
+            </div>
+          )}
+
+          {/* Inline Voice / Video Call Buttons for Stage 4 */}
+          {(m.aiStage === 4 || m.aiAction === 'RECOMMEND_CALL' || m.text?.includes('explain this directly with your peer')) && (
+            <div className="mt-3 pt-3 border-t border-blue-200/50 dark:border-blue-800/40 flex flex-wrap gap-2.5 items-center">
+              <button
+                type="button"
+                onClick={() => onStartCall?.('voice')}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber hover:bg-amber/90 text-white font-semibold text-xs transition-colors shadow-xs cursor-pointer active:scale-95"
+              >
+                <span>🎙️</span>
+                <span>Start Voice Call</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => onStartCall?.('video')}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs transition-colors shadow-xs cursor-pointer active:scale-95"
+              >
+                <span>📹</span>
+                <span>Start Video Call</span>
+              </button>
+            </div>
           )}
         </div>
 

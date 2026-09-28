@@ -12,49 +12,151 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
 // Session debounce store: sessionId -> timestamp of last intervention
 const lastInterventionTimes: Record<string, number> = {};
 
-const CONFUSION_PATTERNS = [
-  /@ai/i,
-  /@copilot/i,
-  /hey ai/i,
-  /ask ai/i,
-  /ai help/i,
-  /help me/i,
-  /can you help/i,
-  /pls help/i,
-  /please help/i,
-  /explain/i,
-  /clarify/i,
-  /how to/i,
-  /how do i/i,
-  /why is/i,
-  /why does/i,
-  /what is/i,
-  /what does/i,
-  /can'?t understand/i,
-  /don'?t get it/i,
-  /what do you mean/i,
-  /confused/i,
-  /make sense/i,
-  /lost/i,
-  /hard to follow/i,
-  /stuck/i,
-  /doubt/i,
-  /error/i,
-  /bug/i,
-  /failing/i,
-  /crash/i,
-  /not working/i,
-  /doesn'?t work/i,
-  /memory leak/i,
-  /infinite loop/i,
-  /race condition/i,
-  /undefined/i,
-  // Tanglish & colloquial patterns
+// Curated high-yield learning videos for core curriculum concepts
+const CURATED_CONCEPT_VIDEOS: Record<string, { youtubeId: string; title: string }> = {
+  // Machine Learning / Neural Networks / Backpropagation / Gradients
+  backpropagation: {
+    youtubeId: 'Ilg3gGewQ5U',
+    title: 'What is backpropagation really doing? | Deep learning, chapter 3 (3Blue1Brown)',
+  },
+  gradient: {
+    youtubeId: 'IHZwWFHWa-w',
+    title: 'Gradient descent, how neural networks learn | Deep learning, chapter 2',
+  },
+  'neural network': {
+    youtubeId: 'aircAruvnKk',
+    title: 'But what is a neural network? | Deep learning, chapter 1',
+  },
+  'machine learning': {
+    youtubeId: 'i_LwzRVP7bg',
+    title: 'Machine Learning for Everybody – Full Course',
+  },
+  // React & Web Development
+  useeffect: {
+    youtubeId: '0ZJgJwR445A',
+    title: 'useEffect Complete Guide - React Hooks Explained',
+  },
+  'react lifecycle': {
+    youtubeId: '0ZJgJwR445A',
+    title: 'React Lifecycle & Hook Cleanup Explained',
+  },
+  cleanup: {
+    youtubeId: '0ZJgJwR445A',
+    title: 'React useEffect Cleanup Functions Demystified',
+  },
+  hooks: {
+    youtubeId: 'TNhaISOUy6Q',
+    title: 'React Hooks Explained Simply',
+  },
+  usestate: {
+    youtubeId: 'O6P86uwfdR0',
+    title: 'React useState Hook Tutorial',
+  },
+  react: {
+    youtubeId: 'bMknfKXIFA8',
+    title: 'React Course - Beginner to Advanced Tutorial',
+  },
+  closure: {
+    youtubeId: 'vKJpN5FAeF4',
+    title: 'JavaScript Closures Explained in 5 Minutes',
+  },
+  promise: {
+    youtubeId: 'DHvZLI7Db8E',
+    title: 'JavaScript Promises in 10 Minutes',
+  },
+  'event loop': {
+    youtubeId: '8zKuNo4ay8E',
+    title: 'What the heck is the event loop anyway? | Philip Roberts',
+  },
+  async: {
+    youtubeId: 'V_Kr9OSfDeU',
+    title: 'Async/Await JavaScript Tutorial – How to Wait for a Function',
+  },
+  javascript: {
+    youtubeId: 'W6NZfCO5SIk',
+    title: 'JavaScript Tutorial for Beginners: Learn JavaScript in 1 Hour',
+  },
+  python: {
+    youtubeId: '_uQrJ0TkZlc',
+    title: 'Python for Beginners - Full Course',
+  },
+  'data structures': {
+    youtubeId: 'RBSGKlAvoiM',
+    title: 'Data Structures and Algorithms for Beginners',
+  },
+  'binary tree': {
+    youtubeId: 'fAAZ23Xd6aC',
+    title: 'Binary Tree Algorithms for Technical Interviews',
+  },
+  recursion: {
+    youtubeId: 'Mv9NEXX1VHc',
+    title: 'Recursion in 100 Seconds',
+  },
+  sql: {
+    youtubeId: 'HXV3zeRR3h4',
+    title: 'SQL Tutorial - Full Database Course for Beginners',
+  },
+  git: {
+    youtubeId: 'RGOj5yH7evk',
+    title: 'Git and GitHub for Beginners - Crash Course',
+  },
+  docker: {
+    youtubeId: 'fqMOX6JJhGo',
+    title: 'Docker Tutorial for Beginners',
+  },
+  'system design': {
+    youtubeId: 'm8Icp_Cid5o',
+    title: 'System Design Interview – Step By Step Guide',
+  },
+};
+
+function resolveVideoForConcept(concept: string, topic: string, query?: string | null) {
+  const norm = `${concept} ${topic} ${query || ''}`.toLowerCase();
+  for (const [key, val] of Object.entries(CURATED_CONCEPT_VIDEOS)) {
+    if (norm.includes(key)) {
+      return {
+        id: `vid_${val.youtubeId}`,
+        youtubeId: val.youtubeId,
+        title: val.title,
+      };
+    }
+  }
+
+  // Fallback to cloudStore library
+  const fallback = getVideoForTopic(concept || topic);
+  return {
+    id: fallback.id || `vid_${fallback.youtube_id}`,
+    youtubeId: fallback.youtube_id,
+    title: fallback.title,
+  };
+}
+
+export const CONFUSION_PATTERNS = [
+  /don'?t\s+understand/i,
+  /don'?t\s+get\s+it/i,
+  /can'?t\s+understand/i,
+  /can'?t\s+get/i,
+  /can'?t\s+visualize/i,
+  /confus(?:ed|ing)/i,
+  /what\s+does\s+(?:that|this)\s+mean/i,
+  /how\s+does\s+(?:that|this)\s+work/i,
+  /what\s+do\s+you\s+mean/i,
+  /can\s+you\s+explain/i,
+  /can\s+you\s+clarify/i,
+  /hard\s+to\s+(?:follow|understand|visualize|picture|grasp)/i,
+  /(?:i'?m|am)\s+(?:still\s+)?(?:lost|stuck|confused)/i,
+  /not\s+clear/i,
+  /still\s+(?:don'?t|unclear|lost|stuck|confused|not\s+clear|struggling|hard)/i,
+  /explain\s+differently/i,
+  /explain\s+again/i,
+  /need\s+(?:a\s+)?(?:video|visual)/i,
+  /video\s+didn'?t\s+help/i,
   /puriyala/i,
-  /theriyala/i,
   /vilangala/i,
-  /purila/i,
-  /solli kudu/i,
+  /innum\s+purila/i,
+  /@ai/i,
+  /hey\s+ai/i,
+  /ai\s+help/i,
 ];
 
 export async function POST(req: NextRequest) {
@@ -62,7 +164,7 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const {
       sessionId = 'global_collab',
-      topic = 'React',
+      topic = 'Software Engineering',
       recentMessages = [],
       senderId = '',
       action = 'check_chat',
@@ -71,12 +173,11 @@ export async function POST(req: NextRequest) {
       reason = 'Not helpful / inappropriate',
     } = body;
 
-    // Handle student reporting video ("Not helpful / inappropriate") -> deprecation flag
+    // Handle student reporting video ("Not helpful / inappropriate")
     if (action === 'report_video' || action === 'deprecate_video') {
       if (!videoId) {
         return NextResponse.json({ success: false, error: 'videoId is required' }, { status: 400 });
       }
-
       const success = deprecateVideo(videoId, reason);
       logAgentActivity(
         'StudyAssistant',
@@ -84,7 +185,6 @@ export async function POST(req: NextRequest) {
         `Video ${videoId} reported as "${reason}" by student. Flagged as deprecated in video library.`,
         { videoId, reason, success }
       );
-
       return NextResponse.json({
         success: true,
         deprecated: true,
@@ -99,292 +199,269 @@ export async function POST(req: NextRequest) {
       }
       const score = typeof postQuizScore === 'number' ? postQuizScore : 0;
       const effect = recordVideoAttempt(videoId, topic, score);
-
-      logAgentActivity(
-        'StudyAssistant',
-        'record_video_quiz',
-        `Recorded post-video quiz score ${score}% for video ${videoId} on topic "${topic}". Current avg: ${effect.avg_score}% (${effect.attempts} attempts).`,
-        { videoId, score, avgScore: effect.avg_score, attempts: effect.attempts }
-      );
-
-      let adaptationNeeded = false;
-      let adaptationReason = '';
-      if (score < 70) {
-        // If score < 70%, trigger Adaptive Engine (rematch or easier subtopic)
-        adaptationNeeded = true;
-        adaptationReason = `Learner scored ${score}% (< 70%) on post-video quiz. Autonomous peer rematch or prerequisite revision triggered.`;
-      }
-
       return NextResponse.json({
         success: true,
         effectiveness: effect,
-        adaptationNeeded,
-        adaptationReason,
+        adaptationNeeded: score < 70,
+        adaptationReason: score < 70 ? `Learner scored ${score}% on post-video quiz.` : '',
         score,
       });
     }
 
-    // 1. Cost & Spam Control: Fast 10-second debounce for smooth live jury demos (bypass entirely for explicit @ai calls)
+    // ─── Fast Debounce Check ──────────────────────────────────────
     const now = Date.now();
     const lastTime = lastInterventionTimes[sessionId] || 0;
-    const cooldownMs = 10 * 1000; // 10 seconds for seamless presentation flow
+    const cooldownMs = 2500; // 2.5s rapid response for interactive conversation
 
     const textMessages = Array.isArray(recentMessages) ? recentMessages : [];
     const last10 = textMessages.slice(-10);
     const latestMsg = last10[last10.length - 1] || {};
-    const latestText = String(latestMsg.text || '');
+    const latestText = String(latestMsg.text || latestMsg.content || '').trim();
 
     const isDirectAi = /@ai|@copilot|hey ai|ask ai|ai help|ai:/i.test(latestText);
 
     if (!isDirectAi && now - lastTime < cooldownMs) {
       return NextResponse.json({
-        success: true,
-        triggered: false,
+        topic,
+        concept: topic,
+        confusionDetected: false,
+        confusionCount: 0,
+        action: 'NONE',
+        explanation: null,
+        youtubeQuery: null,
+        video: null,
         reason: 'Rate limit active (cooldown)',
       });
     }
 
-    // 2. Local keyword check
-    const isConfusionMsg = (text: string) =>
-      CONFUSION_PATTERNS.some((pat) => pat.test(text || ''));
-
-    // Count user's confusion messages in last 10
-    const userConfusionCount = last10.filter(
-      (m: any) =>
-        (m.sender === 'me' || m.senderId === senderId) && isConfusionMsg(m.text)
-    ).length;
-
-    // Count peer's confusion messages in last 10
-    const peerConfusionCount = last10.filter(
-      (m: any) =>
-        (m.sender === 'peer' || (m.senderId && m.senderId !== senderId)) &&
-        isConfusionMsg(m.text)
-    ).length;
-
-    const anyConfusion = isDirectAi || userConfusionCount > 0 || peerConfusionCount > 0;
-
-    if (!anyConfusion) {
-      return NextResponse.json({
-        success: true,
-        triggered: false,
-        reason: 'No confusion detected in recent messages',
-      });
-    }
-
-    // If matched: call Gemini to extract the EXACT concept they are confused about (never show raw)
-    let extractedConcept = topic;
-    if (process.env.GEMINI_API_KEY) {
-      try {
-        const conceptPrompt = `A student studying '${topic}' in a peer programming session is experiencing confusion.
-Recent chat excerpt:
-${last10.map((m: any) => `${m.senderName || m.sender}: ${m.text}`).join('\n')}
-
-Extract the single EXACT specific concept or subtopic they are confused about (e.g. 'useEffect cleanup', 'list slicing', 'async error handling', 'props vs state').
-Return ONLY the concise concept name (1 to 4 words). Do not include formatting, quotes, or conversational text.`;
-
-        const conceptRes = await ai.models.generateContent({
-          model: 'gemini-2.0-flash',
-          contents: conceptPrompt,
-        });
-
-        if (conceptRes.text) {
-          const cleaned = conceptRes.text.trim().replace(/^["']|["']$/g, '');
-          if (cleaned.length > 2 && cleaned.length < 50) {
-            extractedConcept = cleaned;
-          }
-        }
-      } catch (e) {
-        console.warn('[study-assistant] Gemini concept extraction fallback:', e);
-      }
-    }
-
-    // Check if AI previously intervened in last 6 messages
-    const last6 = textMessages.slice(-6);
-    const hasPreviousAiIntervention = last6.some(
+    // ─── Check previous AI interventions in recent history ────────
+    const previousAiMsgs = last10.filter(
       (m: any) =>
         m.type === 'study_assistant' ||
         m.type === 'ai_rephrase' ||
         m.type === 'ai_fallback' ||
-        m.sender === 'ai' ||
-        (m.senderName && (m.senderName.includes('AI') || m.senderName.includes('Tutor')))
+        (m.senderName && m.senderName.includes('AI'))
     );
+    const lastAiMsg = previousAiMsgs[previousAiMsgs.length - 1];
 
-    // Subsequent confusion patterns: user explicitly indicates the previous explanation didn't resolve their doubt
-    const SUBSEQUENT_CONFUSION_PATTERNS = [
-      /still.*(?:confus|don'?t understand|don'?t get|hard|lost|stuck|not clear)/i,
-      /can'?t.*understand/i,
-      /don'?t.*get.*it/i,
-      /explain.*again/i,
-      /explain.*differently/i,
-      /need.*(?:video|visual|tutorial)/i,
-      /video/i,
-      /youtube/i,
-      /puriyala/i,
-      /theriyala/i,
-      /innum.*purila/i,
-    ];
+    let previousStage = 0;
+    if (lastAiMsg) {
+      if (lastAiMsg.aiStage) {
+        previousStage = Number(lastAiMsg.aiStage);
+      } else if (lastAiMsg.aiAction === 'RECOMMEND_CALL' || /call/i.test(lastAiMsg.text || '')) {
+        previousStage = 4;
+      } else if (lastAiMsg.aiAction === 'RECOMMEND_YOUTUBE' || /video|youtube/i.test(lastAiMsg.text || '')) {
+        previousStage = 3;
+      } else if (lastAiMsg.aiAction === 'EXPLAIN_DIFFERENTLY' || /analogy|example|quick check/i.test(lastAiMsg.text || '')) {
+        previousStage = 2;
+      } else if (lastAiMsg.aiAction === 'EXPLAIN' || lastAiMsg.type === 'study_assistant' || lastAiMsg.type === 'ai_rephrase') {
+        previousStage = 1;
+      }
+    }
 
-    const isExplicitSubsequentConfusion = SUBSEQUENT_CONFUSION_PATTERNS.some((pat) => pat.test(latestText));
-    const recentConfusionAfterAi = hasPreviousAiIntervention && (isExplicitSubsequentConfusion || isConfusionMsg(latestText));
+    // Check if the latest message expresses confusion
+    const hasConfusionKeyword = CONFUSION_PATTERNS.some((p) => p.test(latestText));
 
-    // --- STEP 3: Still confused after AI explanation -> Embed ONE targeted video ---
-    if (recentConfusionAfterAi) {
-      lastInterventionTimes[sessionId] = now;
-      const video = getVideoForTopic(extractedConcept || topic);
-
-      const postQuestions = [
-        {
-          id: 'vq1',
-          question: `In ${extractedConcept || topic}, which principle is essential for maintaining predictable behavior?`,
-          options: [
-            'Directly mutating shared global variables',
-            'Applying immutable state updates and explicit dependency control',
-            'Suppressing all asynchronous errors silently',
-            'Running infinite synchronous loops',
-          ],
-          correct: 1,
-        },
-        {
-          id: 'vq2',
-          question: `How should edge cases and async failures in ${extractedConcept || topic} be managed?`,
-          options: [
-            'Robust try/catch error boundaries with fallback states',
-            'Ignoring rejected promises',
-            'Reloading the entire application window',
-            'Wrapping all expressions in eval()',
-          ],
-          correct: 0,
-        },
-        {
-          id: 'vq3',
-          question: `What is the key architectural objective when designing modular implementations for ${extractedConcept || topic}?`,
-          options: [
-            'Minimizing readability to increase minification speed',
-            'High cohesion, loose coupling, and testable isolated contracts',
-            'Avoiding any type definitions or interfaces',
-            'Merging business logic directly into presentation views',
-          ],
-          correct: 1,
-        },
-      ];
-
-      logAgentActivity(
-        'StudyAssistant',
-        'tier_3_curated_video',
-        `Learners remained confused after AI explanation regarding "${extractedConcept}". Embedded curated educational video "${video.title}" (ID: ${video.youtube_id}).`,
-        { concept: extractedConcept, topic, youtubeId: video.youtube_id }
-      );
-
+    // Fast exit if normal chatting with zero confusion indicators
+    const isAcknowledgement = /^(thanks|thank you|got it|makes sense|cool|awesome|ok|okay|let'?s do (?:this|it)|understood|great|nice|perfect)[!.]*$/i.test(
+      latestText
+    );
+    if (isAcknowledgement && !isDirectAi) {
       return NextResponse.json({
-        success: true,
-        triggered: true,
-        tier: 3,
-        action: 'send_video',
-        concept: extractedConcept,
-        video: {
-          id: video.id,
-          youtubeId: video.youtube_id,
-          title: video.title,
-          durationSeconds: 300,
-        },
-        postQuiz: postQuestions,
-        message: `Here's a 5-minute video that explains ${extractedConcept} well. The verification quiz will unlock once you watch 80%.`,
+        topic,
+        concept: topic,
+        confusionDetected: false,
+        confusionCount: 0,
+        action: 'NONE',
+        explanation: null,
+        youtubeQuery: null,
+        video: null,
       });
     }
 
-    // --- STEP 1: Direct @AI invocation OR Single/Multi-peer confusion -> AI teaches with plain language & 3-line example ---
-    if (isDirectAi || (userConfusionCount >= 1 && peerConfusionCount >= 1) || userConfusionCount >= 1) {
-      lastInterventionTimes[sessionId] = now;
+    // ─── Gemini 2.0 Flash Analysis ────────────────────────────────
+    let analysisResult: {
+      topic: string;
+      concept: string;
+      confusionDetected: boolean;
+      confusionCount: number;
+      action: 'NONE' | 'EXPLAIN' | 'EXPLAIN_DIFFERENTLY' | 'RECOMMEND_YOUTUBE' | 'RECOMMEND_CALL';
+      explanation: string | null;
+      youtubeQuery: string | null;
+    } | null = null;
 
-      // Tailored high-quality explanations for common curriculum topics
-      const lowerConcept = (extractedConcept || topic || '').toLowerCase();
-      let defaultExplanation = `In ${extractedConcept || topic}, the key design principle is isolating state transitions and managing side effect lifecycles cleanly to guarantee predictable, bug-free execution.`;
-      let defaultCode = `// Clean lifecycle handling\nuseEffect(() => {\n  const handler = () => updateState();\n  window.addEventListener('resize', handler);\n  return () => window.removeEventListener('resize', handler);\n}, []);`;
+    if (process.env.GEMINI_API_KEY) {
+      try {
+        const transcriptSnippet = last10
+          .map((m: any) => `${m.senderName || (m.sender === 'me' ? 'Student' : 'Peer')}: ${m.text || m.content || ''}`)
+          .join('\n');
 
-      if (lowerConcept.includes('effect') || lowerConcept.includes('cleanup') || lowerConcept.includes('leak')) {
-        defaultExplanation = `In React, cleanup functions inside \`useEffect\` execute right before component unmount and before re-running the effect on dependency change. This prevents zombie subscriptions and memory leaks.`;
-        defaultCode = `useEffect(() => {\n  const timer = setInterval(pollMetrics, 1000);\n  return () => clearInterval(timer); // Clean up!\n}, []);`;
-      } else if (lowerConcept.includes('closure') || lowerConcept.includes('scope')) {
-        defaultExplanation = `A closure gives an inner function access to its outer function's scope even after the outer function has returned. In React, beware of stale closures capturing old state variables.`;
-        defaultCode = `function createCounter() {\n  let count = 0;\n  return () => ++count; // Closure encapsulates 'count'\n}`;
-      } else if (lowerConcept.includes('async') || lowerConcept.includes('race') || lowerConcept.includes('fetch')) {
-        defaultExplanation = `Race conditions occur when async operations resolve out of order, overwriting newer UI data with stale network responses. Guard your state updates with a cancel flag or AbortController.`;
-        defaultCode = `useEffect(() => {\n  let active = true;\n  fetchData(id).then(res => { if (active) setData(res); });\n  return () => { active = false; };\n}, [id]);`;
-      } else if (lowerConcept.includes('reducer') || lowerConcept.includes('state')) {
-        defaultExplanation = `\`useReducer\` centralizes state logic into a pure reducer function \`(state, action) => nextState\`. It is ideal when state transitions depend on previous states or involve multiple sub-values.`;
-        defaultCode = `const [state, dispatch] = useReducer((state, action) => {\n  return action.type === 'inc' ? { count: state.count + 1 } : state;\n}, { count: 0 });`;
+        const prompt = `You are the AI Learning Assistant embedded in SYNAPSE, a peer-learning platform.
+Two students (peers) are having a learning conversation in chat.
+
+CURRENT CONVERSATION EXCERPT:
+${transcriptSnippet || 'No messages yet.'}
+
+LAST MESSAGE SENT:
+"${latestText}"
+
+PREVIOUS AI STAGE IN CONVERSATION: Stage ${previousStage} (0 = none, 1 = initial explanation, 2 = alternative analogy, 3 = video recommended, 4 = call recommended)
+
+TASK:
+Analyze the conversation and determine:
+1. "topic": Overall subject being discussed (e.g., "Neural Networks", "React", "Python").
+2. "concept": The specific technical concept or subtopic (e.g., "Gradients in Backpropagation", "useEffect cleanup", "Recursion base cases").
+3. "confusionDetected": Boolean. Is there confusion, misunderstanding, or a direct question in the latest message(s)? If peers are conversing normally without struggle, false.
+4. "confusionCount": Integer 0 to 4 based on the 4-Stage Escalation Flow:
+   - If no confusion -> 0
+   - If user asks an unrelated or new question -> reset to 1 for that new concept.
+   - If confusion exists and previousStage == 0 -> Stage 1
+   - If confusion persists after Stage 1 (e.g. "still don't understand", "still confused", "what does that mean") -> Stage 2
+   - If confusion persists after Stage 2 (e.g. "still don't get it", "need visual", "hard to visualize") -> Stage 3
+   - If confusion persists after Stage 3 (e.g. "video didn't help", "still stuck") -> Stage 4
+5. "action": One of "NONE", "EXPLAIN", "EXPLAIN_DIFFERENTLY", "RECOMMEND_YOUTUBE", "RECOMMEND_CALL" corresponding to confusionCount (0 -> NONE, 1 -> EXPLAIN, 2 -> EXPLAIN_DIFFERENTLY, 3 -> RECOMMEND_YOUTUBE, 4 -> RECOMMEND_CALL).
+6. "explanation":
+   - For Stage 0: null
+   - For Stage 1: 2 to 3 clear, contextual sentences explaining the confusing concept directly in the context of what the peers were discussing.
+   - For Stage 2: Completely different explanation style. Use plain beginner-friendly language, a clear real-world analogy, a tiny code/concrete example, and end with "Quick Check: [1 simple conceptual question]?".
+   - For Stage 3: A friendly 1-2 sentence recommendation introducing the visual video breakdown.
+   - For Stage 4: "Would you like to explain this directly with your peer? Talking through it in real-time over a voice or video call is often the quickest way to get unstuck."
+7. "youtubeQuery":
+   - For Stage 3: A concise, highly targeted YouTube search query for this concept (e.g. "backpropagation gradient descent visual 3blue1brown").
+   - For other stages: null.
+
+CRITICAL INSTRUCTIONS:
+- Do NOT output markdown code blocks.
+- Return ONLY a raw valid JSON object.`;
+
+        const response = await ai.models.generateContent({
+          model: 'gemini-2.0-flash',
+          contents: prompt,
+        });
+
+        if (response.text) {
+          const cleanText = response.text.replace(/```json/gi, '').replace(/```/g, '').trim();
+          analysisResult = JSON.parse(cleanText);
+        }
+      } catch (geminiErr) {
+        console.warn('[study-assistant] Gemini analysis error, falling back to heuristic engine:', geminiErr);
+      }
+    }
+
+    // ─── Fallback Heuristic Engine if Gemini Unavailable ──────────
+    if (!analysisResult) {
+      if (!hasConfusionKeyword && !isDirectAi) {
+        return NextResponse.json({
+          topic,
+          concept: topic,
+          confusionDetected: false,
+          confusionCount: 0,
+          action: 'NONE',
+          explanation: null,
+          youtubeQuery: null,
+          video: null,
+        });
       }
 
-      let explanation = `${defaultExplanation}\n\n\`\`\`js\n${defaultCode}\n\`\`\``;
+      // Check if user switched to a new/unrelated concept (Reset Rule)
+      const isNewTopic = /(?:switch\s+to|different\s+topic|unrelated|another\s+question|how\s+does\s+sql|databases?|instead)/i.test(latestText);
+      let nextStage = 1;
+      if (!isNewTopic) {
+        if (previousStage === 1) nextStage = 2;
+        else if (previousStage === 2) nextStage = 3;
+        else if (previousStage >= 3) nextStage = 4;
+      }
 
-      if (process.env.GEMINI_API_KEY) {
-        try {
-          const prompt = `You are an AI study assistant joining a peer study session.
-Student question / confusion: "${latestText}"
-Topic: '${extractedConcept || topic}'.
-Recent chat context:
-${last10.map((m: any) => `${m.senderName || m.sender}: ${m.text}`).join('\n')}
+      const actions: Record<number, 'EXPLAIN' | 'EXPLAIN_DIFFERENTLY' | 'RECOMMEND_YOUTUBE' | 'RECOMMEND_CALL'> = {
+        1: 'EXPLAIN',
+        2: 'EXPLAIN_DIFFERENTLY',
+        3: 'RECOMMEND_YOUTUBE',
+        4: 'RECOMMEND_CALL',
+      };
 
-Provide a crystal-clear, plain-language 2-sentence explanation of '${extractedConcept || topic}' followed by ONE concise 3-line code example. Keep it beginner-friendly, concrete, and directly answering their doubt.`;
-
-          const response = await ai.models.generateContent({
-            model: 'gemini-2.0-flash',
-            contents: prompt,
-          });
-
-          if (response.text) {
-            explanation = response.text.trim();
-          }
-        } catch (e) {
-          console.warn('[study-assistant] Gemini call failed, using default explanation:', e);
+      let extractedConcept = topic || 'this concept';
+      const conceptMatch = latestText.match(/(?:understand|about|on|how|what\s+is)\s+([a-zA-Z\s]{3,30})/i);
+      if (conceptMatch && conceptMatch[1]) {
+        const candidate = conceptMatch[1].trim().replace(/[?.!].*$/, '').trim();
+        if (candidate.length > 2 && candidate.length < 35) {
+          extractedConcept = candidate;
         }
       }
 
-      logAgentActivity(
-        'StudyAssistant',
-        'tier_2_joint_explanation',
-        `Assisted student with "${extractedConcept || topic}". Delivered targeted plain-language breakdown with practical code sample.`,
-        { concept: extractedConcept, topic, triggeredBy: isDirectAi ? '@ai mention' : 'confusion pattern' }
-      );
+      let fallbackExplanation = `Let's clarify **${extractedConcept}**: In simple terms, it guides the process step by step to ensure correct and predictable behavior.`;
+      if (nextStage === 2) {
+        fallbackExplanation = `Think of **${extractedConcept}** like following a GPS route: whenever you drift off-course, it calculates the direction and distance back to your goal.\n\nQuick Check: If you take a step in the opposite direction of the gradient, does your error increase or decrease?`;
+      } else if (nextStage === 3) {
+        fallbackExplanation = `Since visual intuition makes **${extractedConcept}** much easier to grasp, here is an intuitive video breakdown:`;
+      } else if (nextStage === 4) {
+        fallbackExplanation = `Would you like to explain this directly with your peer? Talking through it in real-time over voice or video call is often the fastest way to get on the same page.`;
+      }
 
-      return NextResponse.json({
-        success: true,
-        triggered: true,
-        tier: 2,
-        action: 'teach_both',
+      analysisResult = {
+        topic: isNewTopic ? extractedConcept : topic,
         concept: extractedConcept,
-        explanation,
-        message: `🤖 **AI Study Assistant**: Let's clarify **${extractedConcept || topic}**:\n\n${explanation}`,
+        confusionDetected: true,
+        confusionCount: nextStage,
+        action: actions[nextStage] || 'EXPLAIN',
+        explanation: fallbackExplanation,
+        youtubeQuery: `${extractedConcept} visual explanation tutorial`,
+      };
+    }
+
+    // If no confusion detected, return early
+    if (!analysisResult.confusionDetected || analysisResult.action === 'NONE') {
+      return NextResponse.json({
+        topic: analysisResult.topic || topic,
+        concept: analysisResult.concept || topic,
+        confusionDetected: false,
+        confusionCount: 0,
+        action: 'NONE',
+        explanation: null,
+        youtubeQuery: null,
+        video: null,
       });
     }
 
-    // --- STEP 2: Repeated confusion signals without resolution -> Suggest Voice Call ---
-    if (userConfusionCount >= 3) {
-      lastInterventionTimes[sessionId] = now;
+    // Record intervention time for debounce
+    lastInterventionTimes[sessionId] = now;
 
-      logAgentActivity(
-        'StudyAssistant',
-        'tier_1_suggest_voice_call',
-        `Learner sent 3 confusion signals within 10 messages. Suggested starting a live voice call for higher bandwidth communication.`,
-        { userConfusionCount, concept: extractedConcept }
+    // Attach video data if Stage 3 (RECOMMEND_YOUTUBE)
+    let videoData: { id: string; youtubeId: string; title: string } | null = null;
+    if (analysisResult.action === 'RECOMMEND_YOUTUBE' || analysisResult.confusionCount === 3) {
+      videoData = resolveVideoForConcept(
+        analysisResult.concept,
+        analysisResult.topic,
+        analysisResult.youtubeQuery
       );
-
-      return NextResponse.json({
-        success: true,
-        triggered: true,
-        tier: 1,
-        action: 'suggest_voice_call',
-        concept: extractedConcept,
-        message: 'Having trouble understanding each other? Try a voice call to explain in real-time.',
-      });
     }
+
+    logAgentActivity(
+      'StudyAssistant',
+      `escalation_stage_${analysisResult.confusionCount}`,
+      `AI In-Chat Escalation [Stage ${analysisResult.confusionCount}]: ${analysisResult.action} for concept "${analysisResult.concept}" (Topic: ${analysisResult.topic}).`,
+      {
+        concept: analysisResult.concept,
+        stage: analysisResult.confusionCount,
+        action: analysisResult.action,
+        hasVideo: Boolean(videoData),
+      }
+    );
 
     return NextResponse.json({
       success: true,
-      triggered: false,
-      reason: 'Confusion threshold not met for intervention',
+      topic: analysisResult.topic || topic,
+      concept: analysisResult.concept || topic,
+      confusionDetected: true,
+      confusionCount: analysisResult.confusionCount,
+      action: analysisResult.action,
+      explanation: analysisResult.explanation,
+      youtubeQuery: analysisResult.youtubeQuery || null,
+      video: videoData,
+      tier: analysisResult.confusionCount,
+      triggered: true,
+      message: analysisResult.explanation,
     });
   } catch (err: any) {
-    return NextResponse.json({ success: false, error: err?.message }, { status: 500 });
+    return NextResponse.json({ success: false, error: err?.message || 'Server error' }, { status: 500 });
   }
 }
