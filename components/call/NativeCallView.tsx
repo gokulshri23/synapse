@@ -17,17 +17,16 @@ interface NativeCallViewProps {
   onEndCall: (durationSeconds?: number) => void;
 }
 
-// Enterprise-grade STUN and free TURN relay servers (OpenRelay / Metered)
-// Guarantees symmetric NAT and firewall traversal across different networks (WiFi vs Cellular 4G/5G)
+// Enterprise-grade STUN and free TURN relay servers (OpenRelay / Metered / Google / Cloudflare)
 const ICE_SERVERS: RTCIceServer[] = [
-  { urls: 'stun:openrelay.metered.ca:80' },
-  { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
-  { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
-  { urls: 'turns:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
   { urls: 'stun:stun2.l.google.com:19302' },
   { urls: 'stun:stun.cloudflare.com:3478' },
+  { urls: 'stun:openrelay.metered.ca:80' },
+  { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+  { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+  { urls: 'turns:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
 ];
 
 export default function NativeCallView({
@@ -71,7 +70,7 @@ export default function NativeCallView({
   const [selectedCamera, setSelectedCamera] = useState<string>('');
   const [selectedSpeaker, setSelectedSpeaker] = useState<string>('');
 
-  // Refs
+  // Video / Audio Refs
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -79,26 +78,25 @@ export default function NativeCallView({
 
   const localStreamRef = useRef<MediaStream | null>(null);
   const screenStreamRef = useRef<MediaStream | null>(null);
-  const remoteStreamRef = useRef<MediaStream>(new MediaStream());
-  const pcRef = useRef<RTCPeerConnection | null>(null);
+  const remoteStreamRef = useRef<MediaStream | null>(null);
 
+  // PeerJS Refs
+  const peerInstanceRef = useRef<any>(null);
+  const activeCallRef = useRef<any>(null);
+  const callRetryTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Audio meters
   const localAudioCtxRef = useRef<AudioContext | null>(null);
   const remoteAudioCtxRef = useRef<AudioContext | null>(null);
   const localAnimRef = useRef<number | null>(null);
   const remoteAnimRef = useRef<number | null>(null);
 
-  const pendingCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
-  const signalingOfferSentRef = useRef<boolean>(false);
-
   const effectiveRoomName = roomName || sessionId;
   const myId = (currentUserEmail || currentUserName || 'user').toLowerCase().trim();
   const targetPeerId = (peerEmail || peerName || 'peer').toLowerCase().trim();
 
-  // Engine: 'instant' (No-Login Instant Room) vs 'webrtc' (Direct P2P TURN)
-  const [callEngine, setCallEngine] = useState<'instant' | 'webrtc'>('instant');
-  const cleanRoomName = 'synapse_' + effectiveRoomName.replace(/[^a-zA-Z0-9_-]/g, '_');
-  const userFirst = encodeURIComponent((currentUserName || 'Student').split(' ')[0]);
-  const instantRoomUrl = `https://vdo.ninja/?room=${encodeURIComponent(cleanRoomName)}&label=${userFirst}&webcam=${mode === 'video' ? '1' : '0'}&autostart&darkmode&transparent`;
+  const cleanRoom = (effectiveRoomName || 'call_room').toLowerCase().replace(/[^a-z0-9]/g, '_').slice(0, 32);
+  const jitsiUrl = `https://meet.jit.si/synapse_${cleanRoom}`;
 
   // Screen share availability check (desktop only, missing on mobile)
   const isDisplayMediaSupported =
@@ -217,29 +215,9 @@ export default function NativeCallView({
     } catch (e) {}
   }, []);
 
-  // ─── Helper to Post WebRTC Signaling ─────────────────────────
-  const sendSignal = useCallback(
-    (type: string, payload: any) => {
-      fetch('/api/peer-network', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          type,
-          sessionId: effectiveRoomName,
-          senderId: myId,
-          recipientId: targetPeerId,
-          payload,
-        }),
-      }).catch(() => {});
-    },
-    [effectiveRoomName, myId, targetPeerId]
-  );
-
-  // ─── Initialize Media & RTCPeerConnection ────────────────────
+  // ─── Initialize Media & PeerJS P2P Connection ────────────────
   const initConnection = useCallback(async (audioOnly = false) => {
     setPermissionError(null);
-    signalingOfferSentRef.current = false;
-    pendingCandidatesRef.current = [];
 
     let stream: MediaStream | null = null;
     try {
@@ -278,7 +256,7 @@ export default function NativeCallView({
           setPermissionError('No microphone or camera was detected on this device.');
         } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
           setPermissionError(
-            'Camera or microphone is already in use by another application, browser tab, or device.'
+            'Camera or microphone is already in use by another application or browser tab.'
           );
         } else {
           setPermissionError(err.message || 'Could not access media devices.');
@@ -297,252 +275,144 @@ export default function NativeCallView({
     setupLocalAudioMeter(stream);
     refreshDevices();
 
-    // Initialize RTCPeerConnection with TURN relays
-    const pc = new RTCPeerConnection({
-      iceServers: ICE_SERVERS,
-      iceCandidatePoolSize: 4,
-    });
-    pcRef.current = pc;
+    // ─── Connect via PeerJS (No Login, Pure P2P WebRTC) ────────
+    try {
+      const { default: Peer } = await import('peerjs');
 
-    // Add local tracks to RTCPeerConnection
-    stream.getTracks().forEach((track) => {
-      pc.addTrack(track, stream!);
-    });
+      const amIInitiator = typeof isInitiator === 'boolean' ? isInitiator : myId < targetPeerId;
+      const myPeerId = `syn_${cleanRoom}_${amIInitiator ? 'caller' : 'callee'}`;
+      const remotePeerId = `syn_${cleanRoom}_${amIInitiator ? 'callee' : 'caller'}`;
 
-    // Handle incoming remote media tracks
-    pc.ontrack = (event) => {
-      const incomingTrack = event.track;
-      const remoteStream = remoteStreamRef.current;
+      const peer = new Peer(myPeerId, {
+        config: {
+          iceServers: ICE_SERVERS,
+        },
+        debug: 1,
+      });
+      peerInstanceRef.current = peer;
 
-      // Add track to remoteStream without duplicates
-      if (!remoteStream.getTracks().some((t) => t.id === incomingTrack.id)) {
-        remoteStream.addTrack(incomingTrack);
-      }
+      const handleRemoteStream = (remoteStream: MediaStream) => {
+        remoteStreamRef.current = remoteStream;
 
-      // Attach video element
-      if (remoteVideoRef.current) {
-        if (remoteVideoRef.current.srcObject !== remoteStream) {
+        if (remoteVideoRef.current) {
           remoteVideoRef.current.srcObject = remoteStream;
+          remoteVideoRef.current.playsInline = true;
+          remoteVideoRef.current.autoplay = true;
+          remoteVideoRef.current.play().catch(() => {});
         }
-        remoteVideoRef.current.playsInline = true;
-        remoteVideoRef.current.autoplay = true;
-        remoteVideoRef.current.play().catch(() => {});
-      }
 
-      // Attach audio element (unmuted!)
-      if (remoteAudioRef.current) {
-        if (remoteAudioRef.current.srcObject !== remoteStream) {
+        if (remoteAudioRef.current) {
           remoteAudioRef.current.srcObject = remoteStream;
+          remoteAudioRef.current.autoplay = true;
+          remoteAudioRef.current.muted = false;
+          remoteAudioRef.current.setAttribute('playsinline', 'true');
+          const p = remoteAudioRef.current.play();
+          if (p !== undefined) {
+            p.then(() => {
+              setAutoplayBlocked(false);
+              setRemoteAudioActive(true);
+            }).catch(() => {
+              setAutoplayBlocked(true);
+            });
+          }
         }
-        remoteAudioRef.current.autoplay = true;
-        remoteAudioRef.current.muted = false;
-        remoteAudioRef.current.setAttribute('playsinline', 'true');
 
-        const p = remoteAudioRef.current.play();
-        if (p !== undefined) {
-          p.then(() => {
-            setAutoplayBlocked(false);
-            setRemoteAudioActive(true);
-          }).catch((playErr) => {
-            console.warn('[CallMedia] Remote audio autoplay blocked:', playErr);
-            setAutoplayBlocked(true);
-          });
-        }
-      }
-
-      // Connect remote audio stream to analyzer
-      if (incomingTrack.kind === 'audio') {
         setupRemoteAudioMeter(remoteStream);
-        setRemoteAudioActive(true);
-      }
-
-      setPeerConnected(true);
-
-      const updateTrackStates = () => {
-        const vTracks = remoteStream.getVideoTracks();
-        const hasLiveVideo = vTracks.some((t) => t.enabled && t.readyState === 'live');
+        const hasLiveVideo = remoteStream.getVideoTracks().some((t) => t.enabled && t.readyState === 'live');
         setHasRemoteVideo(hasLiveVideo);
+        setRemoteAudioActive(remoteStream.getAudioTracks().length > 0);
+        setPeerConnected(true);
+        setConnectionState('connected');
 
-        const aTracks = remoteStream.getAudioTracks();
-        const hasLiveAudio = aTracks.some((t) => t.enabled && t.readyState === 'live');
-        setRemoteAudioActive(hasLiveAudio);
+        if (callRetryTimerRef.current) {
+          clearInterval(callRetryTimerRef.current);
+          callRetryTimerRef.current = null;
+        }
       };
 
-      updateTrackStates();
-      incomingTrack.onmute = updateTrackStates;
-      incomingTrack.onunmute = updateTrackStates;
-      incomingTrack.onended = updateTrackStates;
-    };
+      peer.on('open', () => {
+        setConnectionState('ready');
 
-    // Connection state listeners
-    pc.onconnectionstatechange = () => {
-      setConnectionState(pc.connectionState);
-      if (pc.connectionState === 'connected') {
-        setPeerConnected(true);
-      } else if (pc.connectionState === 'failed') {
-        // Attempt ICE restart if peer connection failed
-        pc.restartIce();
-      } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'closed') {
-        setTimeout(() => {
-          if (pc.connectionState === 'disconnected' || pc.connectionState === 'closed') {
-            onEndCallRef.current(callDurationRef.current);
-          }
-        }, 1500);
-      }
-    };
+        if (amIInitiator) {
+          const makeCall = () => {
+            if (peerConnected || peer.destroyed) return;
+            try {
+              const call = peer.call(remotePeerId, stream);
+              if (call) {
+                activeCallRef.current = call;
+                call.on('stream', handleRemoteStream);
+                call.on('close', () => {
+                  onEndCallRef.current(callDurationRef.current);
+                });
+                call.on('error', () => {});
+              }
+            } catch (e) {}
+          };
 
-    pc.oniceconnectionstatechange = () => {
-      setIceConnectionState(pc.iceConnectionState);
-      if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
-        setPeerConnected(true);
-      }
-    };
+          makeCall();
+          callRetryTimerRef.current = setInterval(makeCall, 2000);
+        }
+      });
 
-    // Transmit local ICE candidate to peer
-    pc.onicecandidate = (event) => {
-      if (event.candidate) {
-        sendSignal('webrtc_candidate', event.candidate.toJSON ? event.candidate.toJSON() : {
-          candidate: event.candidate.candidate,
-          sdpMid: event.candidate.sdpMid,
-          sdpMLineIndex: event.candidate.sdpMLineIndex,
+      peer.on('call', (incomingCall) => {
+        incomingCall.answer(stream);
+        activeCallRef.current = incomingCall;
+        incomingCall.on('stream', handleRemoteStream);
+        incomingCall.on('close', () => {
+          onEndCallRef.current(callDurationRef.current);
         });
-      }
-    };
+        incomingCall.on('error', () => {});
+      });
 
-    // Determine offer initiator
-    const shouldInitiate = typeof isInitiator === 'boolean' ? isInitiator : myId < targetPeerId;
-    if (shouldInitiate && !signalingOfferSentRef.current) {
-      signalingOfferSentRef.current = true;
-      try {
-        const offer = await pc.createOffer({
-          offerToReceiveAudio: true,
-          offerToReceiveVideo: true,
-        });
-        await pc.setLocalDescription(offer);
-        sendSignal('webrtc_offer', offer);
-      } catch (e) {}
+      peer.on('error', (err: any) => {
+        // peer-unavailable means the other peer hasn't answered yet; interval will retry
+        if (err.type !== 'peer-unavailable') {
+          console.warn('[PeerJS] Notice:', err.type, err.message);
+        }
+      });
+    } catch (e: any) {
+      console.warn('[PeerJS] Init error:', e);
     }
-  }, [mode, myId, targetPeerId, effectiveRoomName, isInitiator, sendSignal, setupLocalAudioMeter, setupRemoteAudioMeter, refreshDevices]);
+  }, [mode, myId, targetPeerId, cleanRoom, isInitiator, setupLocalAudioMeter, setupRemoteAudioMeter, refreshDevices, peerConnected]);
 
-  // Mount media & WebRTC connection when in webrtc mode
+  // Mount media & Peer connection strictly once on mount
   useEffect(() => {
-    if (callEngine === 'webrtc') {
-      initConnection();
-    }
+    initConnection();
 
     return () => {
+      if (callRetryTimerRef.current) {
+        clearInterval(callRetryTimerRef.current);
+        callRetryTimerRef.current = null;
+      }
       if (localAnimRef.current) cancelAnimationFrame(localAnimRef.current);
       if (remoteAnimRef.current) cancelAnimationFrame(remoteAnimRef.current);
       if (localAudioCtxRef.current) localAudioCtxRef.current.close().catch(() => {});
       if (remoteAudioCtxRef.current) remoteAudioCtxRef.current.close().catch(() => {});
+      if (activeCallRef.current) {
+        try {
+          activeCallRef.current.close();
+        } catch (e) {}
+      }
+      if (peerInstanceRef.current) {
+        try {
+          peerInstanceRef.current.destroy();
+        } catch (e) {}
+      }
       if (localStreamRef.current) localStreamRef.current.getTracks().forEach((t) => t.stop());
       if (screenStreamRef.current) screenStreamRef.current.getTracks().forEach((t) => t.stop());
-      if (pcRef.current) pcRef.current.close();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [callEngine]);
+  }, []);
 
   // Ensure local video element rebinds when camera toggles
   useEffect(() => {
-    if (callEngine === 'webrtc' && localVideoRef.current && localStreamRef.current && mode === 'video' && !videoOff) {
+    if (localVideoRef.current && localStreamRef.current && mode === 'video' && !videoOff) {
       if (localVideoRef.current.srcObject !== localStreamRef.current) {
         localVideoRef.current.srcObject = localStreamRef.current;
         localVideoRef.current.play().catch(() => {});
       }
     }
-  }, [callEngine, videoOff, mode]);
-
-  // ─── WebRTC Signaling Poller (350ms interval) ─────────────────
-  useEffect(() => {
-    if (callEngine !== 'webrtc') return;
-    let isMounted = true;
-    let lastSince = Date.now() - 30000;
-    let pollCount = 0;
-
-    const pollSignals = async () => {
-      const pc = pcRef.current;
-      if (!pc || pc.signalingState === 'closed') return;
-
-      pollCount++;
-      // If initiator and still waiting for answer after ~3s, re-broadcast the offer in case callee just joined
-      const shouldInitiate = typeof isInitiator === 'boolean' ? isInitiator : myId < targetPeerId;
-      if (shouldInitiate && pc.signalingState === 'have-local-offer' && pc.localDescription && pollCount % 8 === 0) {
-        sendSignal('webrtc_offer', pc.localDescription);
-      }
-
-      try {
-        const res = await fetch(
-          `/api/peer-network?signaling=true&sessionId=${encodeURIComponent(effectiveRoomName)}&userId=${encodeURIComponent(myId)}&since=${lastSince}`
-        );
-        if (res.ok && isMounted) {
-          const data = await res.json();
-          const signals = Array.isArray(data.signals) ? data.signals : [];
-          for (const sig of signals) {
-            lastSince = Math.max(lastSince, sig.createdAt);
-            const currentPc = pcRef.current;
-            if (!currentPc || currentPc.signalingState === 'closed') continue;
-
-            if (sig.type === 'webrtc_offer') {
-              if (currentPc.signalingState !== 'stable' && currentPc.signalingState !== 'have-local-offer') {
-                continue;
-              }
-              if (currentPc.signalingState === 'have-local-offer') {
-                if (myId < (sig.senderId || '')) continue;
-                await currentPc.setLocalDescription({ type: 'rollback' } as any).catch(() => {});
-              }
-
-              await currentPc.setRemoteDescription(new RTCSessionDescription(sig.payload));
-
-              // Flush queued candidates
-              while (pendingCandidatesRef.current.length > 0) {
-                const cand = pendingCandidatesRef.current.shift();
-                if (cand && (cand.candidate || cand.candidate === '')) {
-                  await currentPc.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
-                }
-              }
-
-              const answer = await currentPc.createAnswer();
-              await currentPc.setLocalDescription(answer);
-              sendSignal('webrtc_answer', answer);
-            } else if (sig.type === 'webrtc_answer') {
-              if (currentPc.signalingState === 'have-local-offer') {
-                await currentPc.setRemoteDescription(new RTCSessionDescription(sig.payload));
-                // Flush queued candidates
-                while (pendingCandidatesRef.current.length > 0) {
-                  const cand = pendingCandidatesRef.current.shift();
-                  if (cand && (cand.candidate || cand.candidate === '')) {
-                    await currentPc.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
-                  }
-                }
-              }
-            } else if (sig.type === 'webrtc_candidate') {
-              if (currentPc.remoteDescription && currentPc.remoteDescription.type) {
-                if (sig.payload && (sig.payload.candidate || sig.payload.candidate === '')) {
-                  await currentPc.addIceCandidate(new RTCIceCandidate(sig.payload)).catch(() => {});
-                }
-              } else if (sig.payload) {
-                pendingCandidatesRef.current.push(sig.payload);
-              }
-            } else if (sig.type === 'screen_share_start') {
-              setIsRemoteScreenSharing(true);
-            } else if (sig.type === 'screen_share_stop') {
-              setIsRemoteScreenSharing(false);
-            } else if (sig.type === 'webrtc_call_end') {
-              onEndCallRef.current(callDurationRef.current);
-              return;
-            }
-          }
-        }
-      } catch (err) {}
-    };
-
-    pollSignals();
-    const interval = setInterval(pollSignals, 350);
-    return () => {
-      isMounted = false;
-      clearInterval(interval);
-    };
-  }, [effectiveRoomName, myId, targetPeerId, isInitiator, sendSignal]);
+  }, [videoOff, mode]);
 
   // ─── Handle Microphone Mute / Unmute ──────────────────────────
   const toggleMic = () => {
@@ -567,13 +437,11 @@ export default function NativeCallView({
           const newVideoTrack = videoStream.getVideoTracks()[0];
           localStreamRef.current?.addTrack(newVideoTrack);
 
-          if (pcRef.current && localStreamRef.current) {
-            const senders = pcRef.current.getSenders();
-            const videoSender = senders.find((s) => s.track && s.track.kind === 'video');
+          if (activeCallRef.current?.peerConnection) {
+            const senders = activeCallRef.current.peerConnection.getSenders();
+            const videoSender = senders.find((s: any) => s.track && s.track.kind === 'video');
             if (videoSender) {
               await videoSender.replaceTrack(newVideoTrack);
-            } else {
-              pcRef.current.addTrack(newVideoTrack, localStreamRef.current);
             }
           }
         } else {
@@ -594,33 +462,27 @@ export default function NativeCallView({
     }
   };
 
-  // ─── Handle Synchronous Screen Share ─────────────────────────
-  // CRITICAL: Call getDisplayMedia SYNCHRONOUSLY at top of click handler!
+  // ─── Handle Screen Share ─────────────────────────────────────
   const toggleScreenShare = async () => {
     triggerAudioPlayback();
 
     if (isScreenSharing) {
-      // Stop screen sharing
       if (screenStreamRef.current) {
         screenStreamRef.current.getTracks().forEach((t) => t.stop());
         screenStreamRef.current = null;
       }
-      // Revert back to local camera track
-      const pc = pcRef.current;
       const camTrack = localStreamRef.current?.getVideoTracks()[0] || null;
-      if (pc) {
-        const senders = pc.getSenders();
-        const videoSender = senders.find((s) => s.track && s.track.kind === 'video');
-        if (videoSender && camTrack) {
+      if (activeCallRef.current?.peerConnection && camTrack) {
+        const senders = activeCallRef.current.peerConnection.getSenders();
+        const videoSender = senders.find((s: any) => s.track && s.track.kind === 'video');
+        if (videoSender) {
           await videoSender.replaceTrack(camTrack);
         }
       }
       setIsScreenSharing(false);
-      sendSignal('screen_share_stop', { active: false });
       return;
     }
 
-    // DIRECTLY inside click handler to prevent "user gesture lost" browser errors
     let displayStream: MediaStream;
     try {
       displayStream = await navigator.mediaDevices.getDisplayMedia({
@@ -643,43 +505,32 @@ export default function NativeCallView({
       screenVideoRef.current.play().catch(() => {});
     }
 
-    // Replace video track with screen track on WebRTC sender
-    const pc = pcRef.current;
-    if (pc) {
-      const senders = pc.getSenders();
-      const videoSender =
-        senders.find((s) => s.track && s.track.kind === 'video') ||
-        senders.find((s) => s.track === null);
+    if (activeCallRef.current?.peerConnection) {
+      const senders = activeCallRef.current.peerConnection.getSenders();
+      const videoSender = senders.find((s: any) => s.track && s.track.kind === 'video');
       if (videoSender) {
         await videoSender.replaceTrack(screenTrack);
-      } else {
-        pc.addTrack(screenTrack, displayStream);
       }
     }
 
     setIsScreenSharing(true);
     setScreenShareError(null);
-    sendSignal('screen_share_start', { active: true });
 
-    // Handle user stopping screen share via browser's native stop bar
     screenTrack.onended = async () => {
       setIsScreenSharing(false);
       screenStreamRef.current = null;
-      const pcInstance = pcRef.current;
       const camTrack = localStreamRef.current?.getVideoTracks()[0] || null;
-      if (pcInstance) {
-        const senders = pcInstance.getSenders();
-        const videoSender = senders.find((s) => s.track && s.track.kind === 'video');
-        if (videoSender && camTrack) {
+      if (activeCallRef.current?.peerConnection && camTrack) {
+        const senders = activeCallRef.current.peerConnection.getSenders();
+        const videoSender = senders.find((s: any) => s.track && s.track.kind === 'video');
+        if (videoSender) {
           await videoSender.replaceTrack(camTrack);
         }
       }
-      sendSignal('screen_share_stop', { active: false });
     };
   };
 
   const handleLocalEndCall = () => {
-    sendSignal('webrtc_call_end', { callDuration: callDurationRef.current });
     onEndCallRef.current(callDurationRef.current);
   };
 
@@ -692,7 +543,7 @@ export default function NativeCallView({
         .toUpperCase()
     : 'P';
 
-  // Local & Remote Participant Debug States for CallDebugPanel
+  // Debug state
   const localParticipantDebug: ParticipantDebugState = {
     name: currentUserName || 'You',
     isLocal: true,
@@ -718,13 +569,13 @@ export default function NativeCallView({
       onClick={triggerAudioPlayback}
       className="w-full h-full flex flex-col bg-[#1C1917] text-white rounded-2xl overflow-hidden relative select-none"
     >
-      {/* ─── Step 1: Call Debug Overlay (?calldebug=1) ──────────────── */}
+      {/* ─── Call Debug Overlay (?calldebug=1) ──────────────── */}
       <CallDebugPanel
-        roomName={effectiveRoomName}
+        roomName={cleanRoom}
         callId={callId}
         connectionState={connectionState}
         iceConnectionState={iceConnectionState}
-        relayType="TURN Relay (openrelay.metered.ca:80/443)"
+        relayType="Direct P2P PeerJS"
         lastError={permissionError || screenShareError}
         localParticipant={localParticipantDebug}
         remoteParticipant={remoteParticipantDebug}
@@ -755,10 +606,10 @@ export default function NativeCallView({
 
       {/* ─── Top HUD ──────────────────────────────────────────────── */}
       <div className="absolute top-3 left-3 right-3 z-20 flex items-center justify-between pointer-events-none">
-        <div className="flex items-center gap-2 bg-ink/80 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/10 shadow-lg pointer-events-auto">
+        <div className="flex items-center gap-2 bg-ink/80 backdrop-blur-md px-3.5 py-1.5 rounded-full border border-white/10 shadow-lg pointer-events-auto">
           <span
-            className={`w-2 h-2 rounded-full ${
-              (callEngine === 'instant' || peerConnected) ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'
+            className={`w-2.5 h-2.5 rounded-full ${
+              peerConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400 animate-ping'
             }`}
           />
           <span className="text-xs font-semibold text-white/90">
@@ -770,61 +621,28 @@ export default function NativeCallView({
         </div>
 
         <div className="flex items-center gap-2 pointer-events-auto">
-          {/* Dual Engine Switcher */}
-          <div className="flex items-center gap-1 bg-ink/90 p-1 rounded-full border border-white/10 text-[11px] shadow-lg">
-            <button
-              type="button"
-              onClick={() => setCallEngine('instant')}
-              className={`px-3 py-1 rounded-full font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
-                callEngine === 'instant'
-                  ? 'bg-amber text-ink shadow'
-                  : 'text-zinc-400 hover:text-white'
-              }`}
-            >
-              <span>⚡</span>
-              <span>Instant Room (No Login)</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setCallEngine('webrtc')}
-              className={`px-3 py-1 rounded-full font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
-                callEngine === 'webrtc'
-                  ? 'bg-emerald-500 text-ink shadow'
-                  : 'text-zinc-400 hover:text-white'
-              }`}
-            >
-              <span>🔒</span>
-              <span>Direct P2P</span>
-            </button>
-          </div>
+          {/* External Jitsi Fallback Link */}
+          <a
+            href={jitsiUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-1.5 bg-ink/80 hover:bg-zinc-800 text-zinc-300 hover:text-white px-3 py-1.5 rounded-full border border-white/10 text-[11px] font-semibold transition-all backdrop-blur-md shadow-lg cursor-pointer"
+            title="Open in Jitsi Meet in a new browser tab"
+          >
+            <span>🌐</span>
+            <span>Open in Jitsi</span>
+          </a>
 
-          {callEngine === 'instant' && (
-            <button
-              type="button"
-              onClick={() => window.open(instantRoomUrl, '_blank', 'width=1000,height=650')}
-              className="hidden sm:flex items-center gap-1 bg-ink/80 hover:bg-zinc-800 backdrop-blur-md px-2.5 py-1.5 rounded-full border border-white/10 text-[11px] text-zinc-300 cursor-pointer transition-colors"
-              title="Open room in new popup window"
-            >
-              <span>↗️</span>
-              <span>Pop Out</span>
-            </button>
-          )}
+          <div className="flex items-center gap-1.5 bg-ink/80 backdrop-blur-md px-2.5 py-1.5 rounded-full border border-white/10 text-[11px] text-zinc-300">
+            <span className="text-emerald-400">🔒</span>
+            <span className="hidden sm:inline">P2P Encrypted</span>
+          </div>
         </div>
       </div>
 
       {/* ─── Main Video / Screen Area ─────────────────────────────── */}
       <div className="flex-1 relative flex items-center justify-center overflow-hidden p-3 pt-14 pb-20">
-        {callEngine === 'instant' ? (
-          <div className="w-full h-full relative rounded-2xl overflow-hidden bg-black/95 flex flex-col border border-white/10 shadow-2xl">
-            <iframe
-              src={instantRoomUrl}
-              allow="camera; microphone; fullscreen; display-capture; autoplay"
-              className="w-full h-full border-0 flex-1 rounded-2xl"
-            />
-          </div>
-        ) : (
-          <>
-            {permissionError && (
+        {permissionError && (
           <div className="absolute top-14 left-4 right-4 z-30 bg-amber/95 text-ink text-xs p-3 rounded-xl border border-amber font-medium shadow-2xl flex flex-col sm:flex-row items-center justify-between gap-2 animate-slide-down">
             <span>{permissionError}</span>
             <div className="flex items-center gap-2 shrink-0">
@@ -891,7 +709,7 @@ export default function NativeCallView({
                   <h3 className="text-base font-serif font-bold text-white mb-0.5">{peerName}</h3>
                   <p className="text-xs text-emerald-400 flex items-center gap-1.5 justify-center">
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                    {peerConnected ? 'Connected via TURN WebRTC' : 'Connecting to peer...'}
+                    {peerConnected ? 'Live Connection Active' : 'Connecting to peer...'}
                   </p>
                   <div className="mt-4 flex items-center gap-1.5">
                     <span className="text-[10px] text-zinc-400 uppercase tracking-widest font-mono">
@@ -959,58 +777,52 @@ export default function NativeCallView({
             </div>
           </div>
         )}
-          </>
-        )}
       </div>
 
       {/* ─── Floating Bottom Control Bar ──────────────────────────── */}
       <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-30 flex items-center gap-3 bg-zinc-900/90 backdrop-blur-xl px-5 py-2.5 rounded-full border border-white/15 shadow-2xl">
-        {callEngine === 'webrtc' && (
-          <>
-            {/* Mic Button */}
-            <button
-              onClick={toggleMic}
-              className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold transition-all cursor-pointer ${
-                micMuted
-                  ? 'bg-bad text-white shadow-bad/40 shadow-lg'
-                  : 'bg-white/10 text-white hover:bg-white/20'
-              }`}
-              title={micMuted ? 'Unmute Microphone' : 'Mute Microphone'}
-            >
-              {micMuted ? '🔇' : '🎙️'}
-            </button>
+        {/* Mic Button */}
+        <button
+          onClick={toggleMic}
+          className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold transition-all cursor-pointer ${
+            micMuted
+              ? 'bg-bad text-white shadow-bad/40 shadow-lg'
+              : 'bg-white/10 text-white hover:bg-white/20'
+          }`}
+          title={micMuted ? 'Unmute Microphone' : 'Mute Microphone'}
+        >
+          {micMuted ? '🔇' : '🎙️'}
+        </button>
 
-            {/* Video Button */}
-            <button
-              onClick={toggleCamera}
-              className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold transition-all cursor-pointer ${
-                videoOff
-                  ? 'bg-zinc-800 text-zinc-400 hover:text-white'
-                  : 'bg-white/10 text-white hover:bg-white/20'
-              }`}
-              title={videoOff ? 'Turn On Camera' : 'Turn Off Camera'}
-            >
-              {videoOff ? '📷' : '📹'}
-            </button>
+        {/* Video Button */}
+        <button
+          onClick={toggleCamera}
+          className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold transition-all cursor-pointer ${
+            videoOff
+              ? 'bg-zinc-800 text-zinc-400 hover:text-white'
+              : 'bg-white/10 text-white hover:bg-white/20'
+          }`}
+          title={videoOff ? 'Turn On Camera' : 'Turn Off Camera'}
+        >
+          {videoOff ? '📷' : '📹'}
+        </button>
 
-            {/* Screen Share Button (Desktop Only: hidden on phones where getDisplayMedia is missing) */}
-            {isDisplayMediaSupported && (
-              <button
-                onClick={toggleScreenShare}
-                className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold transition-all cursor-pointer ${
-                  isScreenSharing
-                    ? 'bg-amber text-white shadow-amber/40 shadow-lg'
-                    : 'bg-white/10 text-white hover:bg-white/20'
-                }`}
-                title={isScreenSharing ? 'Stop Sharing Screen' : 'Share Screen'}
-              >
-                🖥️
-              </button>
-            )}
-
-            <div className="w-[1px] h-6 bg-white/20 mx-1" />
-          </>
+        {/* Screen Share Button (Desktop Only: hidden on phones where getDisplayMedia is missing) */}
+        {isDisplayMediaSupported && (
+          <button
+            onClick={toggleScreenShare}
+            className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold transition-all cursor-pointer ${
+              isScreenSharing
+                ? 'bg-amber text-white shadow-amber/40 shadow-lg'
+                : 'bg-white/10 text-white hover:bg-white/20'
+            }`}
+            title={isScreenSharing ? 'Stop Sharing Screen' : 'Share Screen'}
+          >
+            🖥️
+          </button>
         )}
+
+        <div className="w-[1px] h-6 bg-white/20 mx-1" />
 
         {/* End Call Button */}
         <button
