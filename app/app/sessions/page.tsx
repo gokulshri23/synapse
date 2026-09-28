@@ -184,7 +184,9 @@ function useAsync(asyncFn) {
 
   const scrollToBottom = useCallback((force = false) => {
     if (force || isNearBottomRef.current) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      if (chatContainerRef.current) {
+        chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+      }
       setShowNewMsgIndicator(false);
     } else {
       setShowNewMsgIndicator(true);
@@ -352,11 +354,11 @@ function useAsync(asyncFn) {
                   setPeerSubmitted(true);
                 }
 
+                setTimeout(() => scrollToBottom(), 50);
                 return [...prev, ...newIncoming];
               }
               return prev;
             });
-            scrollToBottom();
           }
         }
       } catch (e) {}

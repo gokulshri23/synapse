@@ -61,6 +61,7 @@ export default function MatchPage() {
   const [matchChatInput, setMatchChatInput] = useState('');
   const [isMatchChatTyping, setIsMatchChatTyping] = useState(false);
   const chatMessagesEndRef = useRef<HTMLDivElement>(null);
+  const chatMessagesContainerRef = useRef<HTMLDivElement>(null);
 
   // Agent State
   const [agentMatches, setAgentMatches] = useState<PeerMatchResult[]>([]);
@@ -505,8 +506,8 @@ export default function MatchPage() {
   }, [activeChatPeer, studentEmail]);
 
   useEffect(() => {
-    if (activeChatPeer) {
-      chatMessagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (activeChatPeer && chatMessagesContainerRef.current) {
+      chatMessagesContainerRef.current.scrollTop = chatMessagesContainerRef.current.scrollHeight;
     }
   }, [matchChatMessages, activeChatPeer]);
 
@@ -1430,7 +1431,7 @@ export default function MatchPage() {
           </div>
 
           {/* Messages Stream */}
-          <div className="p-4 h-[300px] overflow-y-auto space-y-3 bg-canvas/40 flex flex-col">
+          <div ref={chatMessagesContainerRef} className="p-4 h-[300px] overflow-y-auto space-y-3 bg-canvas/40 flex flex-col">
             {matchChatMessages.map((msg) => {
               const isMe = msg.sender === 'me';
               return (
