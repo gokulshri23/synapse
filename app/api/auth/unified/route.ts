@@ -139,7 +139,7 @@ export async function POST(req: Request) {
       let profile = getCloudProfile(normalizedEmail);
 
       // If not cached or incomplete in cloud cache, check Supabase directly
-      if (!profile || !profile.onboarding_complete) {
+      if (!profile || !profile.onboarding_complete || !profile.canTeach || profile.canTeach.length === 0) {
         try {
           const { data: dbProfile, error: dbErr } = await supabase
             .from('profiles')
@@ -148,14 +148,48 @@ export async function POST(req: Request) {
             .maybeSingle();
 
           if (dbProfile && !dbErr && dbProfile.onboarding_complete) {
+            let decodedGoal = dbProfile.learning_goal || '30-day sprint to skill mastery';
+            let decodedDomain: string | undefined = undefined;
+            let decodedTeach: string[] | undefined = undefined;
+            let decodedSeek: string[] | undefined = undefined;
+
+            if (typeof dbProfile.learning_goal === 'string' && dbProfile.learning_goal.startsWith('SYNAPSE_META::')) {
+              try {
+                const parsed = JSON.parse(dbProfile.learning_goal.substring('SYNAPSE_META::'.length));
+                decodedGoal = parsed.g || decodedGoal;
+                decodedDomain = parsed.d;
+                decodedTeach = Array.isArray(parsed.t) ? parsed.t : undefined;
+                decodedSeek = Array.isArray(parsed.s) ? parsed.s : undefined;
+              } catch (e) {}
+            }
+
+            const { getSkillDeclarations } = await import('@/lib/cloudStore');
+            const decls = getSkillDeclarations(normalizedEmail);
+            const declTeach = decls.filter((d) => d.intent === 'teach').map((d) => d.skill);
+            const declLearn = decls.filter((d) => d.intent === 'learn').map((d) => d.skill);
+
+            const resolvedDomain = decodedDomain || (dbProfile.skill_level && !['beginner', 'intermediate', 'advanced'].includes(dbProfile.skill_level.toLowerCase()) ? dbProfile.skill_level : 'React');
+            const resolvedTeach = (decodedTeach && decodedTeach.length > 0)
+              ? decodedTeach
+              : declTeach.length > 0
+              ? declTeach
+              : [(resolvedDomain === 'React' ? 'Python' : 'React'), 'Problem Solving'];
+            const resolvedSeek = (decodedSeek && decodedSeek.length > 0)
+              ? decodedSeek
+              : declLearn.length > 0
+              ? declLearn
+              : [resolvedDomain];
+
             profile = saveCloudProfile({
               name: dbProfile.full_name || authenticatedUser.fullName,
               email: normalizedEmail,
-              domain: dbProfile.skill_level || 'React',
+              domain: resolvedDomain,
               level: dbProfile.skill_level || 'intermediate',
-              goal: dbProfile.learning_goal || '30-day sprint to skill mastery',
+              goal: decodedGoal,
               score: 85,
               onboarding_complete: true,
+              canTeach: resolvedTeach,
+              seekingGuidance: resolvedSeek,
             });
           }
         } catch (e) {}

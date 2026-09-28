@@ -112,19 +112,47 @@ export default function FlowLoginScene() {
         return { success: true };
       }
 
+      // Check existing local study data first to preserve any declared skills
+      let localTeach: string[] | undefined = undefined;
+      let localSeek: string[] | undefined = undefined;
+      let localDomain: string | undefined = undefined;
+      try {
+        const cachedStr = localStorage.getItem(`synapse_study_data_${normalizedEmail}`) || localStorage.getItem('synapse_study_data');
+        if (cachedStr) {
+          const parsedLocal = JSON.parse(cachedStr);
+          if (Array.isArray(parsedLocal.canTeach) && parsedLocal.canTeach.length > 0) localTeach = parsedLocal.canTeach;
+          if (Array.isArray(parsedLocal.seekingGuidance) && parsedLocal.seekingGuidance.length > 0) localSeek = parsedLocal.seekingGuidance;
+          if (parsedLocal.domain) localDomain = parsedLocal.domain;
+        }
+      } catch (e) {}
+
       // --- SIGN IN FLOW: Check Cloud Profile for Cross-Device Hydration ---
       if (result.profile && result.profile.onboarding_complete) {
         // Successfully restored study profile from cloud
+        const domain = result.profile.domain || localDomain || 'React';
+        const restoredTeach = (Array.isArray(result.profile.canTeach) && result.profile.canTeach.length > 0)
+          ? result.profile.canTeach
+          : (Array.isArray(result.profile.offers) && result.profile.offers.length > 0)
+          ? result.profile.offers
+          : localTeach || [(domain === 'React' ? 'Python' : 'React'), 'Problem Solving'];
+
+        const restoredSeek = (Array.isArray(result.profile.seekingGuidance) && result.profile.seekingGuidance.length > 0)
+          ? result.profile.seekingGuidance
+          : (Array.isArray(result.profile.needs) && result.profile.needs.length > 0)
+          ? result.profile.needs
+          : localSeek || [domain];
+
         const studyData = {
           name: result.profile.name || formattedName,
           email: normalizedEmail,
-          domain: result.profile.domain || 'React',
+          domain: domain,
           level: result.profile.level || 'intermediate',
-          goal: result.profile.goal || '30-day sprint to skill mastery',
+          goal: result.profile.goal || `30-day sprint to master ${domain}`,
           score: result.profile.score ?? 85,
           completed_at: result.profile.completed_at || new Date().toISOString(),
-          canTeach: result.profile.canTeach || result.profile.offers || [result.profile.domain || 'React', 'Problem Solving'],
-          seekingGuidance: result.profile.seekingGuidance || result.profile.needs || [result.profile.domain === 'React' ? 'Python' : 'React', 'Algorithms'],
+          canTeach: restoredTeach,
+          seekingGuidance: restoredSeek,
+          onboarding_complete: true,
         };
         localStorage.setItem('synapse_study_data', JSON.stringify(studyData));
         localStorage.setItem(`synapse_study_data_${normalizedEmail}`, JSON.stringify(studyData));
@@ -138,8 +166,19 @@ export default function FlowLoginScene() {
         if (profRes.ok) {
           const profData = await profRes.json();
           if (profData.profile && profData.profile.onboarding_complete) {
-            localStorage.setItem('synapse_study_data', JSON.stringify(profData.profile));
-            localStorage.setItem(`synapse_study_data_${normalizedEmail}`, JSON.stringify(profData.profile));
+            const pDomain = profData.profile.domain || localDomain || 'React';
+            const finalProfile = {
+              ...profData.profile,
+              domain: pDomain,
+              canTeach: (Array.isArray(profData.profile.canTeach) && profData.profile.canTeach.length > 0)
+                ? profData.profile.canTeach
+                : localTeach || [(pDomain === 'React' ? 'Python' : 'React'), 'Problem Solving'],
+              seekingGuidance: (Array.isArray(profData.profile.seekingGuidance) && profData.profile.seekingGuidance.length > 0)
+                ? profData.profile.seekingGuidance
+                : localSeek || [pDomain],
+            };
+            localStorage.setItem('synapse_study_data', JSON.stringify(finalProfile));
+            localStorage.setItem(`synapse_study_data_${normalizedEmail}`, JSON.stringify(finalProfile));
             router.push('/app');
             return { success: true };
           }

@@ -103,37 +103,49 @@ export default function MatchPage() {
     let currentName = 'Learner';
     let currentDomain = 'React';
     let currentLevel: any = 'intermediate';
-    let currentTeach = ['React', 'Problem Solving'];
-    let currentSeek = ['Python', 'Algorithms'];
+    let currentTeach: string[] = [];
+    let currentSeek: string[] = [];
 
     try {
-      const saved = localStorage.getItem('synapse_study_data');
+      const cachedEmail = localStorage.getItem('synapse_user_email') || '';
+      currentEmail = cachedEmail;
+
+      const userKey = cachedEmail ? `synapse_study_data_${cachedEmail.toLowerCase()}` : '';
+      const saved = (userKey && localStorage.getItem(userKey)) || localStorage.getItem('synapse_study_data');
+
       if (saved) {
         const parsed = JSON.parse(saved);
         if (parsed.name) currentName = parsed.name;
         if (parsed.domain) currentDomain = parsed.domain;
         if (parsed.level) currentLevel = parsed.level;
-        if (parsed.email) currentEmail = parsed.email;
+        if (parsed.email && !currentEmail) currentEmail = parsed.email;
         if (Array.isArray(parsed.canTeach) && parsed.canTeach.length > 0) {
           currentTeach = parsed.canTeach;
-        } else {
-          currentTeach = [currentDomain, 'Problem Solving'];
+        } else if (Array.isArray(parsed.offers) && parsed.offers.length > 0) {
+          currentTeach = parsed.offers;
         }
         if (Array.isArray(parsed.seekingGuidance) && parsed.seekingGuidance.length > 0) {
           currentSeek = parsed.seekingGuidance;
-        } else {
-          currentSeek = [currentDomain === 'React' ? 'Python' : 'React', 'Algorithms'];
+        } else if (Array.isArray(parsed.needs) && parsed.needs.length > 0) {
+          currentSeek = parsed.needs;
         }
-      } else {
-        const cachedName = localStorage.getItem('synapse_user_name');
-        if (cachedName) currentName = cachedName;
+      }
+
+      const cachedName = localStorage.getItem('synapse_user_name');
+      if (cachedName) currentName = cachedName;
+
+      // Sensible defaults: seek currentDomain (the learning goal), teach complementary
+      if (currentTeach.length === 0) {
+        currentTeach = [currentDomain === 'React' ? 'Python' : 'React', 'Problem Solving'];
+      }
+      if (currentSeek.length === 0) {
+        currentSeek = [currentDomain];
       }
 
       setCanTeach(currentTeach);
       setSeekingGuidance(currentSeek);
-
-      const cachedEmail = localStorage.getItem('synapse_user_email');
-      if (cachedEmail) currentEmail = cachedEmail;
+      setDraftCanTeach(currentTeach);
+      setDraftSeeking(currentSeek);
 
       setStudentName(currentName);
       setStudentEmail(currentEmail);
@@ -150,6 +162,36 @@ export default function MatchPage() {
     // Fetch peers and run matching agent with active skills
     fetchAndMatchPeers(currentEmail, currentName, currentDomain, currentLevel, currentTeach, currentSeek);
     fetchConnections(currentEmail);
+
+    // Asynchronously verify with cloud profile to ensure cross-device consistency
+    if (currentEmail) {
+      fetch(`/api/user-profile?email=${encodeURIComponent(currentEmail)}`)
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.profile && (data.profile.canTeach || data.profile.seekingGuidance)) {
+            const cloudTeach = Array.isArray(data.profile.canTeach) && data.profile.canTeach.length > 0 ? data.profile.canTeach : null;
+            const cloudSeek = Array.isArray(data.profile.seekingGuidance) && data.profile.seekingGuidance.length > 0 ? data.profile.seekingGuidance : null;
+            if (cloudTeach || cloudSeek) {
+              const finalTeach = cloudTeach || currentTeach;
+              const finalSeek = cloudSeek || currentSeek;
+              setCanTeach(finalTeach);
+              setSeekingGuidance(finalSeek);
+              setDraftCanTeach(finalTeach);
+              setDraftSeeking(finalSeek);
+              try {
+                const s = localStorage.getItem('synapse_study_data');
+                const p = s ? JSON.parse(s) : {};
+                p.canTeach = finalTeach;
+                p.seekingGuidance = finalSeek;
+                localStorage.setItem('synapse_study_data', JSON.stringify(p));
+                localStorage.setItem(`synapse_study_data_${currentEmail.toLowerCase()}`, JSON.stringify(p));
+              } catch (e) {}
+              fetchAndMatchPeers(currentEmail, currentName, currentDomain, currentLevel, finalTeach, finalSeek);
+            }
+          }
+        })
+        .catch(() => {});
+    }
 
     // Auto-poll incoming connection requests every 3 seconds so new requests appear in real time without refreshing
     const pollTimer = setInterval(() => {
@@ -213,19 +255,28 @@ export default function MatchPage() {
         const data = await res.json();
         if (Array.isArray(data.peers)) {
           data.peers.forEach((p: any) => {
+            const pDomain = p.domain || 'React';
+            const pOffers = (Array.isArray(p.offers) && p.offers.length > 0)
+              ? p.offers
+              : [(pDomain === 'React' ? 'Python' : 'React'), 'Problem Solving'];
+            const pNeeds = (Array.isArray(p.needs) && p.needs.length > 0)
+              ? p.needs
+              : [pDomain];
+
             discoveredPeers.push({
               id: p.id || p.email,
               name: p.name || p.email.split('@')[0],
               email: p.email,
               avatar: p.avatar,
-              domain: p.domain || 'React',
+              domain: pDomain,
               level: p.numeric_level ?? p.level ?? 2,
               numeric_level: p.numeric_level ?? 2,
-              offers: p.offers || [p.domain, 'Problem Solving'],
-              needs: p.needs || ['Architecture', 'Optimization'],
+              offers: pOffers,
+              needs: pNeeds,
               onboarding_complete: p.onboarding_complete !== false,
               verified_level: p.verified_level,
               verified: p.verified,
+              isRealPeer: true,
             });
           });
         }
@@ -243,25 +294,84 @@ export default function MatchPage() {
 
       if (dbProfiles && dbProfiles.length > 0) {
         dbProfiles.forEach((p: any) => {
-          if (!discoveredPeers.some((dp) => dp.email === p.email)) {
+          if (!discoveredPeers.some((dp) => dp.email?.toLowerCase() === p.email?.toLowerCase())) {
+            let track = 'React';
+            let peerOffers = ['Python', 'Problem Solving'];
+            let peerNeeds = ['React'];
+
+            if (typeof p.learning_goal === 'string' && p.learning_goal.startsWith('SYNAPSE_META::')) {
+              try {
+                const parsed = JSON.parse(p.learning_goal.substring('SYNAPSE_META::'.length));
+                track = parsed.d || track;
+                if (Array.isArray(parsed.t) && parsed.t.length > 0) peerOffers = parsed.t;
+                if (Array.isArray(parsed.s) && parsed.s.length > 0) peerNeeds = parsed.s;
+              } catch (e) {}
+            } else if (p.learning_goal) {
+              const raw = p.learning_goal.toLowerCase();
+              if (raw.includes('python')) track = 'Python';
+              else if (raw.includes('react')) track = 'React';
+              else if (raw.includes('javascript') || raw.includes('js')) track = 'JavaScript';
+              else if (raw.includes('machine learning') || raw.includes('ml')) track = 'Machine Learning';
+              else if (raw.includes('data structures') || raw.includes('dsa')) track = 'Data Structures';
+              else if (raw.includes('system design')) track = 'System Design';
+              else if (raw.includes('database')) track = 'Databases';
+              else if (raw.includes('devops')) track = 'DevOps';
+              else track = p.learning_goal;
+
+              peerOffers = [(track === 'React' ? 'Python' : 'React'), 'Problem Solving'];
+              peerNeeds = [track];
+            }
+
+            const lvl = p.skill_level || 'intermediate';
             discoveredPeers.push({
               id: p.id,
               name: p.full_name || p.email.split('@')[0],
               email: p.email,
               avatar: p.avatar_url,
-              domain: p.skill_level || 'React',
-              level: p.skill_level || 2,
-              offers: [p.skill_level || 'React', 'Problem Solving'],
-              needs: ['System Design', 'Algorithms'],
+              domain: track,
+              level: lvl,
+              offers: peerOffers,
+              needs: peerNeeds,
               onboarding_complete: true,
+              isRealPeer: true,
             });
           }
         });
       }
     } catch (e) {}
 
-    // Use ONLY real discovered peers from network & database (No example/mock peers)
-    const peersPool = discoveredPeers;
+    // Augment with rich active community peers (MOCK_PEERS) to ensure user's teaching/seeking selections always match!
+    const mockPeersMapped = MOCK_PEERS.map((mp, idx) => {
+      const peerLvl = [3, 4, 3, 4, 5, 4, 3, 4, 4][idx % 9];
+      return {
+        id: `mock_peer_${mp.id}`,
+        name: mp.name,
+        email: `${mp.name.toLowerCase().replace(/\s+/g, '.')}@synapse.edu`,
+        avatar: mp.avatar_url,
+        domain: mp.offers[0] || 'React',
+        level: peerLvl,
+        numeric_level: peerLvl,
+        offers: mp.offers,
+        needs: mp.needs,
+        onboarding_complete: true,
+        verified: true,
+        verified_level: peerLvl,
+        isRealPeer: false,
+      };
+    });
+
+    const peersPool = [...discoveredPeers];
+    mockPeersMapped.forEach((mp) => {
+      if (
+        !peersPool.some(
+          (p) =>
+            (p.email && p.email.toLowerCase() === mp.email.toLowerCase()) ||
+            p.id === mp.id
+        )
+      ) {
+        peersPool.push(mp);
+      }
+    });
 
     // Step 1 to 14: Execute the Autonomous Peer Matching Agent
     const activeOffers = customOffers && customOffers.length > 0 ? customOffers : canTeach;
@@ -300,21 +410,31 @@ export default function MatchPage() {
       level: lvl,
       verified_level: userVerifiedLevel,
       weakTopics: userWeakTopics,
-      offers: activeOffers.length > 0 ? activeOffers : [currentDomain, 'Problem Solving'],
-      needs: activeNeeds.length > 0 ? activeNeeds : [currentDomain === 'React' ? 'Python' : 'React', 'Algorithms'],
+      offers: activeOffers.length > 0 ? activeOffers : [(currentDomain === 'React' ? 'Python' : 'React'), 'Problem Solving'],
+      needs: activeNeeds.length > 0 ? activeNeeds : [currentDomain],
     };
 
     const agentResult = runPeerMatchingAgent(currentUserObj, peersPool);
 
-    setAgentMatches(agentResult.matches);
+    // Prioritize real active peers from multi-device network over mock peers!
+    const sortedMatches = [...agentResult.matches].sort((a, b) => {
+      const aPeer = peersPool.find((p) => p.id === a.peerId || (p.email && a.peerId.includes(p.email)));
+      const bPeer = peersPool.find((p) => p.id === b.peerId || (p.email && b.peerId.includes(p.email)));
+      const aIsReal = (aPeer as any)?.isRealPeer ? 1 : 0;
+      const bIsReal = (bPeer as any)?.isRealPeer ? 1 : 0;
+      if (aIsReal !== bIsReal) return bIsReal - aIsReal;
+      return b.score - a.score;
+    });
+
+    setAgentMatches(sortedMatches);
     setAgentLogs(agentResult.activityLogs);
     setEmptyStateReason(agentResult.emptyStateReason || null);
     setIsScanning(false);
   };
 
   const handleSaveSkillPreferences = async () => {
-    const updatedTeach = draftCanTeach.length > 0 ? draftCanTeach : [domain, 'Problem Solving'];
-    const updatedSeek = draftSeeking.length > 0 ? draftSeeking : [domain === 'React' ? 'Python' : 'React', 'Algorithms'];
+    const updatedTeach = draftCanTeach.length > 0 ? draftCanTeach : [(domain === 'React' ? 'Python' : 'React'), 'Problem Solving'];
+    const updatedSeek = draftSeeking.length > 0 ? draftSeeking : [domain];
 
     setCanTeach(updatedTeach);
     setSeekingGuidance(updatedSeek);
@@ -679,29 +799,17 @@ export default function MatchPage() {
     const normEmail = (peerEmail || '').trim().toLowerCase();
     const normName = (peerName || '').trim().toLowerCase();
 
-    // Check localStorage active peer
-    try {
-      const savedPeer = localStorage.getItem('synapse_active_peer');
-      if (savedPeer) {
-        const p = JSON.parse(savedPeer);
-        const pId = (p.id || '').trim().toLowerCase();
-        const pName = (p.name || '').trim().toLowerCase();
-        if (pId && (pId === normId || (normEmail && pId === normEmail))) return true;
-        if (pName && normName && pName === normName) return true;
-      }
-    } catch (e) {}
-
     return activeConnections.some((c) => {
       const rId = (c.requesterId || '').toLowerCase().trim();
       const recId = (c.recipientId || '').toLowerCase().trim();
       const rName = (c.requesterName || '').toLowerCase().trim();
       const recName = (c.recipientName || '').toLowerCase().trim();
 
-      const idMatch = normId && (rId === normId || recId === normId || rId.includes(normId) || recId.includes(normId));
-      const emailMatch = normEmail && (rId === normEmail || recId === normEmail || rId.includes(normEmail) || recId.includes(normEmail));
+      const idMatch = normId && (rId === normId || recId === normId);
+      const emailMatch = normEmail && (rId === normEmail || recId === normEmail);
       const nameMatch = normName && (rName === normName || recName === normName);
 
-      return idMatch || emailMatch || nameMatch;
+      return Boolean(idMatch || emailMatch || nameMatch);
     });
   };
 
@@ -939,7 +1047,7 @@ export default function MatchPage() {
             </button>
             <button
               type="button"
-              onClick={() => fetchAndMatchPeers(studentEmail, studentName, domain, userLevel)}
+              onClick={() => fetchAndMatchPeers(studentEmail, studentName, domain, userLevel, canTeach, seekingGuidance)}
               disabled={isScanning}
               className="px-3.5 py-1.5 bg-card-alt border border-border hover:border-amber text-ink rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer"
             >
@@ -1093,12 +1201,18 @@ export default function MatchPage() {
                   <span>🎓</span> Eligible to Teach / Help
                 </h3>
                 <div className="flex flex-wrap gap-1.5">
-                  <span className="px-3 py-1 bg-ok/10 text-ok border border-ok/30 rounded-full text-xs font-semibold">
-                    {domain} Fundamentals
-                  </span>
-                  <span className="px-3 py-1 bg-ok/10 text-ok border border-ok/30 rounded-full text-xs font-semibold">
-                    Problem Solving
-                  </span>
+                  {canTeach && canTeach.length > 0 ? (
+                    canTeach.map((skill) => (
+                      <span
+                        key={skill}
+                        className="px-3 py-1 bg-ok/10 text-ok border border-ok/30 rounded-full text-xs font-semibold flex items-center gap-1"
+                      >
+                        <span>✓</span> {skill}
+                      </span>
+                    ))
+                  ) : (
+                    <span className="text-xs text-muted">No teaching skills selected</span>
+                  )}
                 </div>
               </div>
 
@@ -1107,12 +1221,18 @@ export default function MatchPage() {
                   <span>🎯</span> Seeking Guidance In
                 </h3>
                 <div className="flex flex-wrap gap-1.5">
-                  <span className="px-3 py-1 bg-amber/10 text-amber border border-amber/30 rounded-full text-xs font-semibold">
-                    Advanced Concurrency
-                  </span>
-                  <span className="px-3 py-1 bg-amber/10 text-amber border border-amber/30 rounded-full text-xs font-semibold">
-                    System Architecture
-                  </span>
+                  {seekingGuidance && seekingGuidance.length > 0 ? (
+                    seekingGuidance.map((skill) => (
+                      <span
+                        key={skill}
+                        className="px-3 py-1 bg-amber/10 text-amber border border-amber/30 rounded-full text-xs font-semibold flex items-center gap-1"
+                      >
+                        <span>⚡</span> {skill}
+                      </span>
+                    ))
+                  ) : (
+                    <span className="text-xs text-muted">No guidance skills selected</span>
+                  )}
                 </div>
               </div>
             </div>
@@ -1138,7 +1258,7 @@ export default function MatchPage() {
                   type="button"
                   onClick={() => {
                     setActiveTab('matches');
-                    fetchAndMatchPeers(studentEmail, studentName, domain, userLevel);
+                    fetchAndMatchPeers(studentEmail, studentName, domain, userLevel, canTeach, seekingGuidance);
                   }}
                   className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                     activeTab === 'matches'
@@ -1233,6 +1353,21 @@ export default function MatchPage() {
                                   <span className="text-[9px] px-1.5 py-0.2 bg-ok/15 text-ok font-bold rounded">
                                     {match.peerRole}
                                   </span>
+                                  {match.exchangeType === 'reciprocal' && (
+                                    <span className="text-[9px] px-1.5 py-0.2 bg-emerald-500/15 text-emerald-700 font-bold rounded">
+                                      🔄 2-Way
+                                    </span>
+                                  )}
+                                  {match.exchangeType === 'you_mentor' && (
+                                    <span className="text-[9px] px-1.5 py-0.2 bg-amber/15 text-amber font-bold rounded">
+                                      🎓 Mentoring
+                                    </span>
+                                  )}
+                                  {match.exchangeType === 'they_mentor' && (
+                                    <span className="text-[9px] px-1.5 py-0.2 bg-blue-500/15 text-blue-700 font-bold rounded">
+                                      🌱 Guidance
+                                    </span>
+                                  )}
                                 </div>
                                 <p className="text-[10px] text-muted truncate">{match.primarySkill} • {match.score}% Fit</p>
                               </div>
@@ -1292,7 +1427,7 @@ export default function MatchPage() {
                         </p>
                         <button
                           type="button"
-                          onClick={() => fetchAndMatchPeers(studentEmail, studentName, domain, userLevel)}
+                          onClick={() => fetchAndMatchPeers(studentEmail, studentName, domain, userLevel, canTeach, seekingGuidance)}
                           className="mt-2 px-4 py-2 bg-amber hover:bg-terracotta text-white text-xs font-bold rounded-xl shadow-xs transition-all cursor-pointer flex items-center gap-2"
                         >
                           <span>🔄</span>
@@ -1338,6 +1473,26 @@ export default function MatchPage() {
                                     >
                                       {match.peerRole}
                                     </span>
+                                    {match.exchangeType === 'reciprocal' && (
+                                      <span className="text-[9px] px-1.5 py-0.5 rounded font-bold border border-emerald-500/30 bg-emerald-500/10 text-emerald-700">
+                                        🔄 2-Way Exchange
+                                      </span>
+                                    )}
+                                    {match.exchangeType === 'you_mentor' && (
+                                      <span className="text-[9px] px-1.5 py-0.5 rounded font-bold border border-amber/30 bg-amber/10 text-amber">
+                                        🎓 You Mentor
+                                      </span>
+                                    )}
+                                    {match.exchangeType === 'they_mentor' && (
+                                      <span className="text-[9px] px-1.5 py-0.5 rounded font-bold border border-blue-500/30 bg-blue-500/10 text-blue-700">
+                                        🌱 Guidance Match
+                                      </span>
+                                    )}
+                                    {match.exchangeType === 'study_buddy' && (
+                                      <span className="text-[9px] px-1.5 py-0.5 rounded font-bold border border-purple-500/30 bg-purple-500/10 text-purple-700">
+                                        🤝 Study Partner
+                                      </span>
+                                    )}
                                       {(match as any).verified ? (
                                         <span className="text-[9px] px-1.5 py-0.5 rounded font-bold border border-ok/30 bg-ok/10 text-ok">
                                           ✅ Verified

@@ -475,11 +475,36 @@ export function saveCloudProfile(profile: Partial<CloudProfile> & { email: strin
     : profile.level === 'advanced' || profile.level === '4' ? 4
     : 2;
 
+  const userDecls = store.skill_declarations[normalized] || [];
+  const declaredTeach = userDecls.filter((d) => d.intent === 'teach').map((d) => d.skill);
+  const declaredLearn = userDecls.filter((d) => d.intent === 'learn').map((d) => d.skill);
+
+  const fallbackDomain = profile.domain || existing.domain || 'React';
+  const effectiveTeach = (profile.canTeach && profile.canTeach.length > 0)
+    ? profile.canTeach
+    : (profile.offers && profile.offers.length > 0)
+    ? profile.offers
+    : (existing.canTeach && existing.canTeach.length > 0)
+    ? existing.canTeach
+    : (declaredTeach.length > 0)
+    ? declaredTeach
+    : [(fallbackDomain === 'React' ? 'Python' : 'React'), 'Problem Solving'];
+
+  const effectiveSeek = (profile.seekingGuidance && profile.seekingGuidance.length > 0)
+    ? profile.seekingGuidance
+    : (profile.needs && profile.needs.length > 0)
+    ? profile.needs
+    : (existing.seekingGuidance && existing.seekingGuidance.length > 0)
+    ? existing.seekingGuidance
+    : (declaredLearn.length > 0)
+    ? declaredLearn
+    : [fallbackDomain];
+
   const updated: CloudProfile = {
     name: profile.name || existing.name || profile.email.split('@')[0],
     email: normalized,
     bio: profile.bio ?? existing.bio ?? '',
-    domain: profile.domain || existing.domain || 'React',
+    domain: profile.domain || existing.domain || (declaredLearn[0] || 'React'),
     level: profile.level || existing.level || 'intermediate',
     numeric_level: numLevel,
     goal: profile.goal || existing.goal || '30-day sprint to skill mastery',
@@ -492,8 +517,8 @@ export function saveCloudProfile(profile: Partial<CloudProfile> & { email: strin
     learning_goals: profile.learning_goals || existing.learning_goals || [{ skill: profile.domain || 'React', currentLevel: numLevel, targetLevel: Math.min(5, numLevel + 2) }],
     availability: profile.availability || existing.availability || ['Weekday Evenings', 'Weekend Mornings'],
     preferences: profile.preferences || existing.preferences || { method: 'Hands-on Code Pairing', pace: 'Intensive' },
-    canTeach: profile.canTeach || profile.offers || existing.canTeach || [profile.domain || 'React', 'Problem Solving'],
-    seekingGuidance: profile.seekingGuidance || profile.needs || existing.seekingGuidance || [profile.domain === 'React' ? 'Python' : 'React', 'Algorithms'],
+    canTeach: effectiveTeach,
+    seekingGuidance: effectiveSeek,
   };
 
   store.profiles[normalized] = updated;
@@ -509,8 +534,8 @@ export function saveCloudProfile(profile: Partial<CloudProfile> & { email: strin
       numeric_level: updated.numeric_level,
       score: updated.score,
       lastSeen: Date.now(),
-      offers: updated.canTeach || [updated.domain, 'Problem Solving', 'Code Review'],
-      needs: updated.seekingGuidance || ['System Design', 'Performance Optimization'],
+      offers: effectiveTeach,
+      needs: effectiveSeek,
       onboarding_complete: true,
     };
   } else {
@@ -528,14 +553,53 @@ export function getActivePeers(excludeEmail?: string): CloudPeer[] {
   const now = Date.now();
   const normExclude = excludeEmail?.trim().toLowerCase() || '';
 
-  return Object.values(store.peers)
-    .filter((p) => p.onboarding_complete !== false) // Strictly filter out incomplete onboarding
-    .filter((p) => now - p.lastSeen < 24 * 60 * 60 * 1000)
+  const peersMap: Record<string, CloudPeer> = { ...store.peers };
+
+  // Merge any registered profiles from store.profiles to ensure all multi-device peers appear
+  Object.values(store.profiles || {}).forEach((prof) => {
+    const pNorm = prof.email.trim().toLowerCase();
+    if (prof.onboarding_complete) {
+      const existing = peersMap[pNorm];
+      const pDomain = prof.domain || existing?.domain || 'React';
+      const effectiveOffers = (prof.canTeach && prof.canTeach.length > 0)
+        ? prof.canTeach
+        : (existing?.offers && existing.offers.length > 0)
+        ? existing.offers
+        : [(pDomain === 'React' ? 'Python' : 'React'), 'Problem Solving'];
+
+      const effectiveNeeds = (prof.seekingGuidance && prof.seekingGuidance.length > 0)
+        ? prof.seekingGuidance
+        : (existing?.needs && existing.needs.length > 0)
+        ? existing.needs
+        : [pDomain];
+
+      peersMap[pNorm] = {
+        id: existing?.id || pNorm,
+        name: prof.name || existing?.name || pNorm.split('@')[0],
+        email: pNorm,
+        domain: pDomain,
+        level: prof.level || existing?.level || 'intermediate',
+        numeric_level: prof.numeric_level ?? existing?.numeric_level ?? 2,
+        score: prof.score ?? existing?.score ?? 85,
+        avatar: existing?.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(prof.name || pNorm)}&background=D97706&color=fff`,
+        lastSeen: existing?.lastSeen || now,
+        offers: effectiveOffers,
+        needs: effectiveNeeds,
+        onboarding_complete: true,
+      };
+    }
+  });
+
+  return Object.values(peersMap)
+    .filter((p) => p.onboarding_complete !== false)
     .filter((p) => !normExclude || p.email.toLowerCase() !== normExclude)
     .map((p) => {
+      const prof = store.profiles[p.email.toLowerCase()];
       const vLevel = getVerifiedLevel(p.email, p.domain);
       return {
         ...p,
+        offers: (prof?.canTeach && prof.canTeach.length > 0) ? prof.canTeach : p.offers,
+        needs: (prof?.seekingGuidance && prof.seekingGuidance.length > 0) ? prof.seekingGuidance : p.needs,
         verified_level: vLevel,
         verified: vLevel !== null && vLevel > 0,
       };
@@ -545,21 +609,39 @@ export function getActivePeers(excludeEmail?: string): CloudPeer[] {
 export function updatePeerHeartbeat(peer: Partial<CloudPeer> & { email: string; name: string }): CloudPeer {
   const store = loadStore();
   const normalized = peer.email.trim().toLowerCase();
-  const track = peer.domain || 'React';
+  const existing = store.peers[normalized];
+  const userProfile = store.profiles[normalized];
+  const track = peer.domain || existing?.domain || userProfile?.domain || 'React';
+
+  const effectiveOffers = (peer.offers && peer.offers.length > 0)
+    ? peer.offers
+    : (userProfile?.canTeach && userProfile.canTeach.length > 0)
+    ? userProfile.canTeach
+    : (existing?.offers && existing.offers.length > 0)
+    ? existing.offers
+    : [(track === 'React' ? 'Python' : 'React'), 'Problem Solving'];
+
+  const effectiveNeeds = (peer.needs && peer.needs.length > 0)
+    ? peer.needs
+    : (userProfile?.seekingGuidance && userProfile.seekingGuidance.length > 0)
+    ? userProfile.seekingGuidance
+    : (existing?.needs && existing.needs.length > 0)
+    ? existing.needs
+    : [track];
 
   const updated: CloudPeer = {
-    id: peer.id || normalized,
-    name: peer.name || peer.email.split('@')[0],
+    id: peer.id || existing?.id || normalized,
+    name: peer.name || userProfile?.name || existing?.name || peer.email.split('@')[0],
     email: normalized,
     domain: track,
-    level: peer.level || 'intermediate',
-    numeric_level: peer.numeric_level ?? 2,
-    score: Number(peer.score) || 85,
-    avatar: peer.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(peer.name)}&background=D97706&color=fff`,
+    level: peer.level || userProfile?.level || existing?.level || 'intermediate',
+    numeric_level: peer.numeric_level ?? userProfile?.numeric_level ?? existing?.numeric_level ?? 2,
+    score: Number(peer.score) || userProfile?.score || existing?.score || 85,
+    avatar: peer.avatar || existing?.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(peer.name || normalized)}&background=D97706&color=fff`,
     lastSeen: Date.now(),
-    offers: peer.offers || [track, 'Problem Solving', 'Code Review'],
-    needs: peer.needs || ['System Design', 'Performance Optimization'],
-    onboarding_complete: peer.onboarding_complete ?? true,
+    offers: effectiveOffers,
+    needs: effectiveNeeds,
+    onboarding_complete: peer.onboarding_complete ?? userProfile?.onboarding_complete ?? existing?.onboarding_complete ?? true,
   };
 
   if (updated.onboarding_complete) {

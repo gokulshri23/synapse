@@ -155,6 +155,8 @@ export default function SettingsPage() {
             level: studyLevel,
             score: studyScore,
             goal: studyGoal,
+            canTeach: existing.canTeach,
+            seekingGuidance: existing.seekingGuidance,
             onboarding_complete: true,
           }),
         }).catch(() => {});

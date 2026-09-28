@@ -71,13 +71,14 @@ export interface PeerMatchResult {
   primarySkill: string;
   score: number;
   breakdown: MatchScoreBreakdown;
-  matchType: 'direct_reciprocal' | 'direct_oneway' | 'multihop_chain';
+  matchType: 'direct_reciprocal' | 'direct_oneway' | 'multihop_chain' | 'user_mentoring' | 'peer_collaborator';
   multiHopChain?: MultiHopChainNode[];
   plainExplanation: string;
   canTeach: string[];
   wantsToLearn: string[];
   verified?: boolean;
   topicOverlap?: string[];
+  exchangeType?: 'reciprocal' | 'they_mentor' | 'you_mentor' | 'study_buddy' | 'circle';
 }
 
 export interface AgentActivityLog {
@@ -136,34 +137,98 @@ const SKILL_NORMALIZATION_MAP: Record<string, string> = {
   'ai/ml': 'Machine Learning',
   'deep learning': 'Machine Learning',
   'neural networks': 'Machine Learning',
+  'data science': 'Machine Learning',
   // Data Structures
   'data structures': 'Data Structures',
   'dsa': 'Data Structures',
-  'algorithms': 'Data Structures',
-  'algo': 'Data Structures',
   'data structures & algorithms': 'Data Structures',
+  // Algorithms
+  'algorithms': 'Algorithms',
+  'algorithm': 'Algorithms',
+  'algo': 'Algorithms',
+  'competitive programming': 'Algorithms',
+  // Web Development
+  'web development': 'Web Development',
+  'web dev': 'Web Development',
+  'frontend': 'Web Development',
+  'frontend development': 'Web Development',
+  'full stack': 'Web Development',
+  'fullstack': 'Web Development',
+  'html/css': 'Web Development',
   // TypeScript
   'typescript': 'TypeScript',
   'ts': 'TypeScript',
-  // SQL
-  'sql': 'SQL',
-  'postgresql': 'SQL',
-  'postgres': 'SQL',
-  'database': 'SQL',
-  'sqlite': 'SQL',
+  // Databases & SQL
+  'sql': 'Databases',
+  'databases': 'Databases',
+  'database': 'Databases',
+  'postgresql': 'Databases',
+  'postgres': 'Databases',
+  'sqlite': 'Databases',
+  'mysql': 'Databases',
+  'mongodb': 'Databases',
   // System Design
   'system design': 'System Design',
   'architecture': 'System Design',
   'distributed systems': 'System Design',
+  'cloud architecture': 'System Design',
+  // DevOps
+  'devops': 'DevOps',
+  'cloud': 'DevOps',
+  'docker': 'DevOps',
+  'kubernetes': 'DevOps',
+  'ci/cd': 'DevOps',
+  'aws': 'DevOps',
   // Problem Solving
   'problem solving': 'Problem Solving',
-  'code review': 'Code Review',
+  'code review': 'Problem Solving',
+  'debugging': 'Problem Solving',
+  // Mobile Development
+  'mobile development': 'Mobile Development',
+  'mobile dev': 'Mobile Development',
+  'react native': 'Mobile Development',
+  'flutter': 'Mobile Development',
+  'ios': 'Mobile Development',
+  'android': 'Mobile Development',
 };
 
 export function normalizeSkillName(rawName: string): string {
   if (!rawName) return 'General';
   const clean = rawName.trim().toLowerCase();
   return SKILL_NORMALIZATION_MAP[clean] || rawName.trim();
+}
+
+/**
+ * Fuzzy Semantic and Affinity Matching
+ * Returns matches=true and score (0.7 to 1.0) if skills match directly or share domain clusters.
+ */
+export function matchSkillAffinity(skillA: string, skillB: string): { matches: boolean; score: number } {
+  if (!skillA || !skillB) return { matches: false, score: 0 };
+  const normA = normalizeSkillName(skillA).toLowerCase();
+  const normB = normalizeSkillName(skillB).toLowerCase();
+
+  // 1. Exact normalized match
+  if (normA === normB) return { matches: true, score: 1.0 };
+
+  // 2. Substring overlap (e.g. "react" in "react native", "algorithms" in "data structures & algorithms")
+  if (normA.includes(normB) || normB.includes(normA)) return { matches: true, score: 0.90 };
+
+  // 3. Domain cluster affinities
+  const clusters: string[][] = [
+    ['react', 'javascript', 'web development', 'next.js', 'typescript'],
+    ['data structures', 'algorithms', 'problem solving'],
+    ['machine learning', 'python', 'ai'],
+    ['system design', 'databases', 'devops'],
+    ['mobile development', 'react', 'javascript'],
+  ];
+
+  for (const c of clusters) {
+    if (c.includes(normA) && c.includes(normB)) {
+      return { matches: true, score: 0.80 };
+    }
+  }
+
+  return { matches: false, score: 0 };
 }
 
 // Helper to parse numeric level
@@ -235,12 +300,14 @@ export function calculateMatchScore(params: {
   hasAvailabilityOverlap?: boolean;
   learnerWeakTopics?: string[];
   teacherStrongTopics?: string[];
+  skillAffinityScore?: number;
+  matchOrientation?: 'peer_teaches_user' | 'user_teaches_peer' | 'reciprocal' | 'study_partners';
 }): MatchScoreBreakdown & { topicOverlap: string[] } {
   const normTarget = normalizeSkillName(params.targetSkill);
   const normOffers = params.teacherOffers.map(normalizeSkillName);
 
-  // 1. Skill Match (30%) - Section 1: share of learner's Weak topics that teacher is Strong in (and verified for)
-  let skillScore = 0.3;
+  // 1. Skill Match (30%)
+  let skillScore = params.skillAffinityScore != null ? params.skillAffinityScore : 0.85;
   let topicOverlap: string[] = [];
 
   if (params.learnerWeakTopics && params.learnerWeakTopics.length > 0) {
@@ -254,51 +321,79 @@ export function calculateMatchScore(params: {
         wt.toLowerCase().includes(st.toLowerCase())
       )
     );
-    skillScore = topicOverlap.length > 0
-      ? Math.min(1.0, Math.max(0.4, topicOverlap.length / params.learnerWeakTopics.length))
-      : 0.35;
-  } else {
-    if (normOffers.includes(normTarget)) {
-      skillScore = 1.0;
-    } else if (normOffers.some((o) => o.toLowerCase().includes(normTarget.toLowerCase()) || normTarget.toLowerCase().includes(o.toLowerCase()))) {
-      skillScore = 0.7;
+    if (topicOverlap.length > 0) {
+      skillScore = Math.min(1.0, Math.max(0.70, topicOverlap.length / params.learnerWeakTopics.length));
     }
+  } else if (normOffers.includes(normTarget)) {
+    skillScore = 1.0;
+  } else if (normOffers.some((o) => o.toLowerCase().includes(normTarget.toLowerCase()) || normTarget.toLowerCase().includes(o.toLowerCase()))) {
+    skillScore = Math.max(skillScore, 0.90);
   }
 
   // 2. Proficiency Balance (20%) - Zone of Proximal Development (ZPD)
-  // Ideal: teacher is 1-2 levels above learner
-  const levelDiff = params.teacherLevel - params.learnerCurrentLevel;
-  let proficiencyScore = 0.0;
-  if (levelDiff === 1 || levelDiff === 2) {
-    proficiencyScore = 1.0; // Optimal ZPD
-  } else if (levelDiff === 3) {
-    proficiencyScore = 0.8;
-  } else if (levelDiff >= 4) {
-    proficiencyScore = 0.65; // Great depth, slight penalty for potential curse of knowledge
-  } else if (params.teacherLevel === 2 && params.learnerCurrentLevel <= 1) {
-    proficiencyScore = 0.85; // Peer Helper for basics
-  } else if (levelDiff === 0 && params.teacherLevel >= 2) {
-    proficiencyScore = 0.5; // Study buddies at same level
+  const orientation = params.matchOrientation || (params.isReciprocal ? 'reciprocal' : 'peer_teaches_user');
+  let proficiencyScore = 0.85;
+
+  if (orientation === 'user_teaches_peer') {
+    // User is the teacher; peer is learner
+    const diff = params.learnerCurrentLevel - params.teacherLevel;
+    if (diff >= 1 && diff <= 2) {
+      proficiencyScore = 1.0; // Optimal ZPD for user to teach
+    } else if (diff >= 3) {
+      proficiencyScore = 0.90; // High mastery difference
+    } else if (diff === 0) {
+      proficiencyScore = 0.85; // Peer-to-peer helper
+    } else {
+      proficiencyScore = 0.75; // Mutual learning
+    }
+  } else if (orientation === 'study_partners') {
+    // Co-learners studying together
+    const diff = Math.abs(params.teacherLevel - params.learnerCurrentLevel);
+    if (diff === 0) {
+      proficiencyScore = 0.95; // Same level peers make ideal study partners
+    } else if (diff === 1) {
+      proficiencyScore = 0.90; // Close companion level
+    } else {
+      proficiencyScore = 0.80;
+    }
   } else {
-    proficiencyScore = 0.1;
+    // Peer teaches user (or reciprocal)
+    const levelDiff = params.teacherLevel - params.learnerCurrentLevel;
+    if (levelDiff === 1 || levelDiff === 2) {
+      proficiencyScore = 1.0; // Optimal ZPD
+    } else if (levelDiff === 3) {
+      proficiencyScore = 0.90;
+    } else if (levelDiff >= 4) {
+      proficiencyScore = 0.80; // Expert mentor
+    } else if (params.teacherLevel >= 2 && params.learnerCurrentLevel <= 1) {
+      proficiencyScore = 0.90; // Peer helper for foundational mastery
+    } else if (levelDiff === 0) {
+      proficiencyScore = 0.85; // Parallel peers
+    } else {
+      proficiencyScore = 0.75;
+    }
   }
 
   // 3. Learning Need Urgency (15%)
   const needGap = Math.max(1, params.learnerTargetLevel - params.learnerCurrentLevel);
-  const needScore = needGap >= 3 ? 1.0 : needGap === 2 ? 0.85 : 0.7;
+  const needScore = needGap >= 3 ? 1.0 : needGap === 2 ? 0.90 : 0.80;
 
   // 4. Schedule / Availability (15%)
-  const availabilityScore = params.hasAvailabilityOverlap !== false ? 0.95 : 0.5;
+  const availabilityScore = params.hasAvailabilityOverlap !== false ? 0.95 : 0.70;
 
   // 5. Learning Style / Preference (10%)
-  const preferenceScore = 0.9;
+  const preferenceScore = 0.92;
 
   // 6. Network Value (10%)
-  let networkScore = 0.6;
+  let networkScore = 0.80;
   if (params.isReciprocal) {
-    networkScore = 1.0; // Perfect mutual learning exchange
+    networkScore = 1.0; // Mutual learning exchange
   } else if (params.isMultiHop) {
-    networkScore = 0.95; // Solves 3-party closed loop
+    networkScore = 0.95; // 3-party closed loop
+  } else if (orientation === 'user_teaches_peer') {
+    networkScore = 0.90; // Mentorship reinforces retention
+  } else if (orientation === 'peer_teaches_user') {
+    networkScore = 0.88;
   }
 
   const rawTotal =
@@ -309,7 +404,7 @@ export function calculateMatchScore(params: {
     0.1 * preferenceScore +
     0.1 * networkScore;
 
-  const finalPercentage = Math.min(99, Math.max(40, Math.round(rawTotal * 100)));
+  const finalPercentage = Math.min(99, Math.max(50, Math.round(rawTotal * 100)));
   const formulaString = `30%(${skillScore.toFixed(2)}) + 20%(${proficiencyScore.toFixed(2)}) + 15%(${needScore.toFixed(2)}) + 15%(${availabilityScore.toFixed(2)}) + 10%(${preferenceScore.toFixed(2)}) + 10%(${networkScore.toFixed(2)}) = ${finalPercentage}%`;
 
   return {
@@ -380,7 +475,7 @@ export function runPeerMatchingAgent(
     logs.push(createLog('OBSERVE', `Using self-declared level (unverified)`));
   }
   logs.push(
-    createLog('UNDERSTAND', `Normalizing skill taxonomy: Needs [${userNeeds.join(', ')}], Can Offer [${userOffers.join(', ')}]`)
+    createLog('UNDERSTAND', `Normalizing skill taxonomy: Seeking [${userNeeds.join(', ')}], Offering to Teach [${userOffers.join(', ')}]`)
   );
 
   // Step 3 & 5: CLASSIFY
@@ -422,52 +517,130 @@ export function runPeerMatchingAgent(
 
     const peerOffers = (peer.offers || [peer.domain]).map(normalizeSkillName);
     const peerNeeds = (peer.needs || []).map(normalizeSkillName);
-    const peerRole = classifyRoleForSkill(peerLevel, Math.min(5, peerLevel + 1) as NumericProficiency);
 
-    // Can this peer teach user's desired skill?
-    // Teacher must be level >= 3, or level == 2 if user is level 0 or 1
-    const canTeachUser = peerOffers.some((offered) => {
-      const matchFound = userNeeds.some((need) => need === offered || offered.includes(need) || need.includes(offered));
-      if (!matchFound) return false;
-      if (peerLevel >= 3) return true;
-      if (peerLevel === 2 && userCurrentLevel <= 1) return true;
-      return false;
-    });
+    // 1. Check if peer can teach what user needs
+    let bestPeerTeachesUser: { peerSkill: string; userSkill: string; score: number } | null = null;
+    for (const pOff of peerOffers) {
+      for (const uNeed of userNeeds) {
+        const aff = matchSkillAffinity(pOff, uNeed);
+        if (aff.matches && (!bestPeerTeachesUser || aff.score > bestPeerTeachesUser.score)) {
+          bestPeerTeachesUser = { peerSkill: pOff, userSkill: uNeed, score: aff.score };
+        }
+      }
+    }
 
-    if (!canTeachUser) continue;
+    // 2. Check if user can teach what peer needs
+    let bestUserTeachesPeer: { userSkill: string; peerSkill: string; score: number } | null = null;
+    for (const uOff of userOffers) {
+      for (const pNeed of peerNeeds) {
+        const aff = matchSkillAffinity(uOff, pNeed);
+        if (aff.matches && (!bestUserTeachesPeer || aff.score > bestUserTeachesPeer.score)) {
+          bestUserTeachesPeer = { userSkill: uOff, peerSkill: pNeed, score: aff.score };
+        }
+      }
+    }
 
-    // Is it reciprocal? (Can user teach peer anything peer needs?)
-    const canUserTeachPeer =
-      userCurrentLevel >= 2 &&
-      userOffers.some((userOffered) =>
-        peerNeeds.some((peerNeed) => peerNeed === userOffered || userOffered.includes(peerNeed) || peerNeed.includes(userOffered))
-      );
+    // 3. Check for co-study partner overlap (shared learning goals or skills)
+    let bestStudyOverlap: { userSkill: string; peerSkill: string; score: number } | null = null;
+    for (const uNeed of userNeeds) {
+      for (const pNeed of peerNeeds) {
+        const aff = matchSkillAffinity(uNeed, pNeed);
+        if (aff.matches && (!bestStudyOverlap || aff.score > bestStudyOverlap.score)) {
+          bestStudyOverlap = { userSkill: uNeed, peerSkill: pNeed, score: aff.score };
+        }
+      }
+    }
+    for (const uOff of userOffers) {
+      for (const pOff of peerOffers) {
+        const aff = matchSkillAffinity(uOff, pOff);
+        if (aff.matches && (!bestStudyOverlap || aff.score > bestStudyOverlap.score)) {
+          bestStudyOverlap = { userSkill: uOff, peerSkill: pOff, score: aff.score };
+        }
+      }
+    }
+
+    const peerCanTeachUser = bestPeerTeachesUser !== null;
+    const userCanTeachPeer = bestUserTeachesPeer !== null;
+    const areStudyPartners = bestStudyOverlap !== null;
+
+    if (!peerCanTeachUser && !userCanTeachPeer && !areStudyPartners) {
+      continue; // No skill connection
+    }
+
+    // Determine exchange type & primary skill
+    let exchangeType: 'reciprocal' | 'they_mentor' | 'you_mentor' | 'study_buddy';
+    let matchType: 'direct_reciprocal' | 'direct_oneway' | 'user_mentoring' | 'peer_collaborator';
+    let matchOrientation: 'reciprocal' | 'peer_teaches_user' | 'user_teaches_peer' | 'study_partners';
+    let primarySkill = '';
+    let affinityScore = 1.0;
+
+    if (peerCanTeachUser && userCanTeachPeer) {
+      exchangeType = 'reciprocal';
+      matchType = 'direct_reciprocal';
+      matchOrientation = 'reciprocal';
+      primarySkill = bestPeerTeachesUser!.peerSkill;
+      affinityScore = Math.max(bestPeerTeachesUser!.score, bestUserTeachesPeer!.score);
+    } else if (peerCanTeachUser) {
+      exchangeType = 'they_mentor';
+      matchType = 'direct_oneway';
+      matchOrientation = 'peer_teaches_user';
+      primarySkill = bestPeerTeachesUser!.peerSkill;
+      affinityScore = bestPeerTeachesUser!.score;
+    } else if (userCanTeachPeer) {
+      exchangeType = 'you_mentor';
+      matchType = 'user_mentoring';
+      matchOrientation = 'user_teaches_peer';
+      primarySkill = bestUserTeachesPeer!.userSkill;
+      affinityScore = bestUserTeachesPeer!.score;
+    } else {
+      exchangeType = 'study_buddy';
+      matchType = 'peer_collaborator';
+      matchOrientation = 'study_partners';
+      primarySkill = bestStudyOverlap!.userSkill;
+      affinityScore = bestStudyOverlap!.score;
+    }
+
+    // Dynamic role classification
+    let peerRole: PeerRole;
+    if (exchangeType === 'reciprocal') {
+      peerRole = 'TEACHER + LEARNER';
+    } else if (exchangeType === 'they_mentor') {
+      peerRole = peerLevel >= 4 ? 'MENTOR' : peerLevel >= 3 ? 'TEACHER' : 'PEER HELPER';
+    } else if (exchangeType === 'you_mentor') {
+      peerRole = 'LEARNER';
+    } else {
+      peerRole = 'PEER HELPER';
+    }
 
     const breakdown = calculateMatchScore({
-      targetSkill: userNeeds[0] || userDomain,
+      targetSkill: primarySkill,
       teacherOffers: peerOffers,
       learnerNeeds: userNeeds,
       teacherLevel: peerLevel,
       learnerCurrentLevel: userCurrentLevel,
       learnerTargetLevel: userTargetLevel,
-      isReciprocal: canUserTeachPeer,
+      isReciprocal: exchangeType === 'reciprocal',
       isMultiHop: false,
       learnerWeakTopics: currentUser.weakTopics,
       teacherStrongTopics: peer.strongTopics || peerOffers,
+      skillAffinityScore: affinityScore,
+      matchOrientation,
     });
 
-    // Step 12: Plain-language decision explanation with real topic overlap
+    // Step 12: Plain-language decision explanation
+    const verifiedText = isPeerVerified ? (peerLevel >= 3 ? 'Verified Teacher' : 'Verified Peer') : PROFICIENCY_LABELS[peerLevel];
     let explanation = '';
-    const verifiedText = isPeerVerified ? (peerLevel >= 3 ? 'Verified Teacher' : 'Verified Peer Helper') : PROFICIENCY_LABELS[peerLevel];
-    
+
     if (breakdown.topicOverlap && breakdown.topicOverlap.length > 0) {
-      explanation = `${peer.name} is Strong in ${breakdown.topicOverlap.join(' and ')}, your ${breakdown.topicOverlap.length > 1 ? `${breakdown.topicOverlap.length} ` : ''}weak topic${breakdown.topicOverlap.length > 1 ? 's' : ''}.`;
-    } else if (canUserTeachPeer) {
-      explanation = `Matched with ${peer.name} because they are ${verifiedText} (Level ${peerLevel}) in ${peerOffers[0] || userDomain} and can guide your growth, while you offer ${userOffers[0]} which they need. Perfect 2-way reciprocal match!`;
-    } else if (peerLevel === 2 && userCurrentLevel <= 1) {
-      explanation = `Matched with ${peer.name} as a ${isPeerVerified ? 'Verified Peer Helper' : 'certified Peer Helper'} (Level 2) in ${peerOffers[0] || userDomain}. They will assist you in mastering foundational concepts smoothly.`;
+      explanation = `${peer.name} is Strong in ${breakdown.topicOverlap.join(' and ')}, directly addressing your weak topic${breakdown.topicOverlap.length > 1 ? 's' : ''}.`;
+    } else if (exchangeType === 'reciprocal') {
+      explanation = `2-Way Reciprocal Match: ${peer.name} (${verifiedText}) can guide you in ${bestPeerTeachesUser!.userSkill}, while you mentor them in ${bestUserTeachesPeer!.peerSkill}. Complete mutual exchange symmetry!`;
+    } else if (exchangeType === 'they_mentor') {
+      explanation = `Guidance Match: ${peer.name} offers ${primarySkill} (${verifiedText}, Level ${peerLevel}) to assist your progression toward Level ${userTargetLevel}. Optimal Zone of Proximal Development coaching.`;
+    } else if (exchangeType === 'you_mentor') {
+      explanation = `Mentorship Opportunity: You are eligible to teach ${bestUserTeachesPeer!.userSkill}, which ${peer.name} is actively seeking. Mentoring them reinforces your own mastery (Protégé Effect).`;
     } else {
-      explanation = `Matched with ${peer.name} because they are ${verifiedText} (Level ${peerLevel}) in ${peerOffers[0] || userDomain}, providing optimal Zone of Proximal Development coaching.`;
+      explanation = `Peer Study Partner: Both you and ${peer.name} are actively developing skills in ${primarySkill}. Ideal partner for pair programming and mock challenges.`;
     }
 
     matches.push({
@@ -476,10 +649,11 @@ export function runPeerMatchingAgent(
       peerName: peer.name,
       peerAvatar: peer.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(peer.name)}&background=D97706&color=fff`,
       peerRole,
-      primarySkill: peerOffers[0] || userDomain,
+      primarySkill,
       score: breakdown.finalPercentage,
       breakdown,
-      matchType: canUserTeachPeer ? 'direct_reciprocal' : 'direct_oneway',
+      matchType,
+      exchangeType,
       plainExplanation: explanation,
       canTeach: peerOffers,
       wantsToLearn: peerNeeds,
@@ -488,9 +662,7 @@ export function runPeerMatchingAgent(
     });
   }
 
-  // Step 8: Multi-hop Circular Chains
-  // If user needs X and can offer Y, but no peer directly needs Y and offers X:
-  // Detect 3-party chain: User -> Peer A -> Peer B -> User
+  // Step 8: Multi-hop Circular Chains (3-Party Cycles)
   if (validPeers.length >= 2) {
     for (let i = 0; i < validPeers.length; i++) {
       for (let j = 0; j < validPeers.length; j++) {
@@ -506,15 +678,15 @@ export function runPeerMatchingAgent(
         const pBOffers = (pB.offers || [pB.domain]).map(normalizeSkillName);
         const pBNeeds = (pB.needs || []).map(normalizeSkillName);
 
-        // Chain condition:
+        // Chain condition with affinity matching:
         // 1. User offers something pA needs
         // 2. pA offers something pB needs
         // 3. pB offers something User needs
-        const userTeachesPA = userOffers.some((uO) => pANeeds.includes(uO));
-        const pATeachesPB = pAOffers.some((aO) => pBNeeds.includes(aO));
-        const pBTeachesUser = pBOffers.some((bO) => userNeeds.includes(bO));
+        const userTeachesPA = userOffers.some((uO) => pANeeds.some((pAN) => matchSkillAffinity(uO, pAN).matches));
+        const pATeachesPB = pAOffers.some((aO) => pBNeeds.some((pBN) => matchSkillAffinity(aO, pBN).matches));
+        const pBTeachesUser = pBOffers.some((bO) => userNeeds.some((uN) => matchSkillAffinity(bO, uN).matches));
 
-        if (userTeachesPA && pATeachesPB && pBTeachesUser) {
+        if (userTeachesPA && pATeachesPB && pBTeachesUser && !matches.some((m) => m.peerId === pB.id)) {
           const matchedSkill = pBOffers[0] || userDomain;
           const breakdown = calculateMatchScore({
             targetSkill: matchedSkill,
@@ -525,6 +697,7 @@ export function runPeerMatchingAgent(
             learnerTargetLevel: userTargetLevel,
             isReciprocal: false,
             isMultiHop: true,
+            matchOrientation: 'peer_teaches_user',
           });
 
           const chain: MultiHopChainNode[] = [
@@ -543,6 +716,7 @@ export function runPeerMatchingAgent(
             score: breakdown.finalPercentage,
             breakdown,
             matchType: 'multihop_chain',
+            exchangeType: 'circle',
             multiHopChain: chain,
             plainExplanation: `Autonomous 3-party chain resolved: You mentor ${pA.name} in ${userOffers[0]}, ${pA.name} mentors ${pB.name} in ${pAOffers[0]}, and ${pB.name} mentors you in ${matchedSkill}. Full network symmetry achieved!`,
             canTeach: pBOffers,
@@ -554,7 +728,7 @@ export function runPeerMatchingAgent(
     }
   }
 
-  // Step 10 & 11: Rank matches & Dead-end Handling
+  // Step 10 & 11: Rank matches
   matches.sort((a, b) => b.score - a.score);
 
   logs.push(
@@ -564,7 +738,7 @@ export function runPeerMatchingAgent(
     createLog('EVALUATE NETWORK', `Computed 6-factor weighted compatibility formula across candidates`)
   );
   logs.push(
-    createLog('CREATE CONNECTIONS', `Ranked top ${Math.min(matches.length, 5)} verified peer connections`)
+    createLog('CREATE CONNECTIONS', `Ranked top ${Math.min(matches.length, 8)} verified peer connections`)
   );
   logs.push(
     createLog('EXPLAIN', `Generated natural-language rationale explaining proximal development zones and reciprocity`)
@@ -585,8 +759,9 @@ export function runPeerMatchingAgent(
   }
 
   return {
-    matches: matches.slice(0, 5),
+    matches: matches.slice(0, 8),
     activityLogs: logs,
     emptyStateReason,
   };
 }
+

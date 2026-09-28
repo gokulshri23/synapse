@@ -8,9 +8,16 @@ import ThemeToggle from '@/components/ui/ThemeToggle';
 const AVAILABLE_DOMAINS = [
   { id: 'React', name: 'React', desc: 'Components, Hooks, State & Next.js', icon: '⚛️' },
   { id: 'Python', name: 'Python', desc: 'Core Syntax, OOP, Data Science & APIs', icon: '🐍' },
-  { id: 'Machine Learning', name: 'Machine Learning', desc: 'Math, Neural Networks, PyTorch & Sklearn', icon: '🧠' },
   { id: 'JavaScript', name: 'JavaScript', desc: 'Modern ES6+, DOM, Async & Node.js', icon: '⚡' },
+  { id: 'Machine Learning', name: 'Machine Learning', desc: 'Math, Neural Networks, PyTorch & Sklearn', icon: '🧠' },
   { id: 'Data Structures', name: 'Data Structures', desc: 'Arrays, Trees, Graphs & Dynamic Programming', icon: '🌲' },
+  { id: 'System Design', name: 'System Design', desc: 'Microservices, Scalability, Caching & Load Balancing', icon: '🏗️' },
+  { id: 'Algorithms', name: 'Algorithms', desc: 'Sorting, Searching, Greedy, DP & LeetCode Prep', icon: '🧩' },
+  { id: 'Web Development', name: 'Web Development', desc: 'Full-Stack Apps, HTML5/CSS3, REST APIs & SSR', icon: '🌐' },
+  { id: 'Databases', name: 'Databases & SQL', desc: 'PostgreSQL, MongoDB, Query Optimization & Indexing', icon: '🗄️' },
+  { id: 'DevOps', name: 'DevOps & Cloud', desc: 'Docker, Kubernetes, CI/CD Pipelines & AWS Deployment', icon: '☁️' },
+  { id: 'Problem Solving', name: 'Problem Solving', desc: 'Logic, Debugging, Analytical Thinking & Code Reviews', icon: '💡' },
+  { id: 'Mobile Development', name: 'Mobile Development', desc: 'React Native, Flutter, Cross-Platform iOS & Android', icon: '📱' },
 ];
 
 const STUDY_DURATION_OPTIONS = [
@@ -28,7 +35,11 @@ const TEACHING_SKILL_TAGS = [
   { id: 'Data Structures', label: 'Data Structures', icon: '🌲' },
   { id: 'System Design', label: 'System Design', icon: '🏗️' },
   { id: 'Algorithms', label: 'Algorithms', icon: '🧩' },
+  { id: 'Web Development', label: 'Web Dev', icon: '🌐' },
+  { id: 'Databases', label: 'Databases', icon: '🗄️' },
+  { id: 'DevOps', label: 'DevOps', icon: '☁️' },
   { id: 'Problem Solving', label: 'Problem Solving', icon: '💡' },
+  { id: 'Mobile Development', label: 'Mobile Dev', icon: '📱' },
 ];
 
 export default function OnboardingPage() {
@@ -45,7 +56,17 @@ export default function OnboardingPage() {
   const [studyDays, setStudyDays] = useState(30);
   const [customDays, setCustomDays] = useState('');
   const [isCustomDays, setIsCustomDays] = useState(false);
-  const [teachingSkills, setTeachingSkills] = useState<string[]>([]);
+  const [teachingSkills, setTeachingSkills] = useState<string[]>(['Python', 'Problem Solving']);
+
+  const handleSelectLearningSkill = (newSkill: string) => {
+    setLearningSkill(newSkill);
+    setTeachingSkills((prev) => {
+      const filtered = prev.filter((s) => s !== newSkill);
+      if (filtered.length > 0) return filtered;
+      const comp = newSkill === 'React' ? 'Python' : 'React';
+      return [comp, 'Problem Solving'];
+    });
+  };
 
   // Verification Quizzes State
   const [quizPhase, setQuizPhase] = useState<'diagnostic' | 'teaching'>('diagnostic');
@@ -79,10 +100,15 @@ export default function OnboardingPage() {
   // Proctor Video Checking State (Step 3)
   const [proctorVideoActive, setProctorVideoActive] = useState(false);
   const [proctorStatus, setProctorStatus] = useState<string>('Camera checking ready');
+  const [proctorWarning, setProctorWarning] = useState<string | null>(null);
+  const [detectedItem, setDetectedItem] = useState<string | null>(null);
+  const [proctorViolations, setProctorViolations] = useState(0);
+  const [isProctorScanning, setIsProctorScanning] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const proctorScanIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Video Proctoring Lifecycle for Quiz Attempt Section
+  // Video Proctoring Lifecycle for Quiz Attempt Section with Real-Time Vision Scan
   useEffect(() => {
     let active = true;
     if (step === 3) {
@@ -106,7 +132,48 @@ export default function OnboardingPage() {
             videoRef.current.play().catch(() => {});
           }
           setProctorVideoActive(true);
-          setProctorStatus('Live Proctor Active • Face & Environment Monitored');
+          setProctorStatus('Live AI Proctor Active • Scanning for phones & notes');
+
+          // Offscreen canvas for frame capture
+          const canvas = document.createElement('canvas');
+          canvas.width = 320;
+          canvas.height = 240;
+          const ctx = canvas.getContext('2d');
+
+          // Live scanning loop: captures a frame every 3.5 seconds and passes to /api/proctor-vision
+          if (proctorScanIntervalRef.current) clearInterval(proctorScanIntervalRef.current);
+          proctorScanIntervalRef.current = setInterval(async () => {
+            if (!active || !videoRef.current || videoRef.current.readyState < 2) return;
+            try {
+              setIsProctorScanning(true);
+              if (ctx && videoRef.current) {
+                ctx.drawImage(videoRef.current, 0, 0, 320, 240);
+                const frameData = canvas.toDataURL('image/jpeg', 0.65);
+                const res = await fetch('/api/proctor-vision', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ image: frameData }),
+                });
+                if (res.ok) {
+                  const data = await res.json();
+                  if (data.detected) {
+                    const itemLabel = data.item || 'unauthorized material';
+                    setDetectedItem(itemLabel);
+                    setProctorWarning(`🚨 Unauthorized item detected: ${itemLabel.toUpperCase()}! ${data.explanation || 'Please keep hands and workspace in clear view.'}`);
+                    setProctorStatus(`⚠️ Alert: ${itemLabel} in camera frame`);
+                    setProctorViolations((prev) => prev + 1);
+                  } else {
+                    setDetectedItem(null);
+                    setProctorWarning(null);
+                    setProctorStatus('🟢 AI Proctor Active • Workspace Verified (Clean)');
+                  }
+                }
+              }
+            } catch (err) {
+            } finally {
+              setIsProctorScanning(false);
+            }
+          }, 3500);
         } catch (err: any) {
           setProctorVideoActive(false);
           setProctorStatus('Camera optional: Proceeding without video feed');
@@ -114,14 +181,23 @@ export default function OnboardingPage() {
       }
       startProctorVideo();
     } else {
+      if (proctorScanIntervalRef.current) {
+        clearInterval(proctorScanIntervalRef.current);
+        proctorScanIntervalRef.current = null;
+      }
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((t) => t.stop());
         streamRef.current = null;
       }
       setProctorVideoActive(false);
+      setProctorWarning(null);
     }
     return () => {
       active = false;
+      if (proctorScanIntervalRef.current) {
+        clearInterval(proctorScanIntervalRef.current);
+        proctorScanIntervalRef.current = null;
+      }
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((t) => t.stop());
         streamRef.current = null;
@@ -216,12 +292,17 @@ export default function OnboardingPage() {
     const finalDays = isCustomDays ? parseInt(customDays || '30', 10) : studyDays;
     setStudyDays(finalDays);
 
+    const effectiveTeach = teachingSkills.length > 0
+      ? teachingSkills
+      : [learningSkill === 'React' ? 'Python' : 'React', 'Problem Solving'];
+    setTeachingSkills(effectiveTeach);
+
     // Transition to Step 3 (Verification)
     setStep(3);
     setQuizPhase('diagnostic');
     setCurrentDiagIdx(0);
     loadDiagnosticQuestions(learningSkill);
-    loadTeachingPrompt(teachingSkills[0] || learningSkill);
+    loadTeachingPrompt(effectiveTeach[0] || (learningSkill === 'React' ? 'Python' : 'React'));
   };
 
   // Diagnostic (Quiz 1) handlers
@@ -341,7 +422,7 @@ export default function OnboardingPage() {
 
     setIsEvaluatingTeaching(true);
     try {
-      const teachSkill = teachingSkills[0] || learningSkill;
+      const teachSkill = (teachingSkills.length > 0 ? teachingSkills[0] : null) || (learningSkill === 'React' ? 'Python' : 'React');
       const res = await fetch('/api/teaching-challenge', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -388,6 +469,11 @@ export default function OnboardingPage() {
     const finalDays = isCustomDays ? parseInt(customDays || '30', 10) : studyDays;
     const goalText = `${finalDays}-Day Study Sprint in ${learningSkill}`;
 
+    const effectiveTeach = teachingSkills.length > 0
+      ? teachingSkills
+      : [learningSkill === 'React' ? 'Python' : 'React', 'Problem Solving'];
+    const effectiveSeek = [learningSkill];
+
     const studyData = {
       name: name.trim() || 'Learner',
       email: normalizedEmail,
@@ -398,8 +484,8 @@ export default function OnboardingPage() {
       goal: goalText,
       score: diagScore ?? 80,
       completed_at: new Date().toISOString(),
-      canTeach: teachingSkills,
-      seekingGuidance: [learningSkill],
+      canTeach: effectiveTeach,
+      seekingGuidance: effectiveSeek,
       onboarding_complete: true,
       verified_level: teachingEvaluation?.assignedLevel ?? 3,
     };
@@ -430,7 +516,7 @@ export default function OnboardingPage() {
         }),
       });
 
-      for (const tSkill of teachingSkills) {
+      for (const tSkill of effectiveTeach) {
         await fetch('/api/skill-declarations', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -576,7 +662,7 @@ export default function OnboardingPage() {
                     <button
                       key={d.id}
                       type="button"
-                      onClick={() => setLearningSkill(d.id)}
+                      onClick={() => handleSelectLearningSkill(d.id)}
                       className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer flex items-center gap-3 ${
                         learningSkill === d.id
                           ? 'border-amber bg-amber/10 shadow-xs ring-1 ring-amber'
@@ -719,9 +805,9 @@ export default function OnboardingPage() {
               </div>
 
               {/* Live Proctor Video Verification Box */}
-              <div className="p-3.5 bg-card-alt rounded-2xl border border-border flex flex-wrap items-center justify-between gap-3 shadow-2xs">
+              <div className={`p-3.5 bg-card-alt rounded-2xl border transition-all ${proctorWarning ? 'border-bad bg-bad/5 ring-1 ring-bad' : 'border-border'} flex flex-wrap items-center justify-between gap-3 shadow-2xs`}>
                 <div className="flex items-center gap-3">
-                  <div className="relative w-28 h-20 rounded-xl bg-ink/90 overflow-hidden border border-border/80 shadow-xs shrink-0 flex items-center justify-center">
+                  <div className={`relative w-28 h-20 rounded-xl bg-ink/90 overflow-hidden border shadow-xs shrink-0 flex items-center justify-center transition-all ${proctorWarning ? 'border-bad ring-2 ring-bad' : 'border-border/80'}`}>
                     <video
                       ref={videoRef}
                       autoPlay
@@ -736,24 +822,34 @@ export default function OnboardingPage() {
                       </div>
                     )}
                     {proctorVideoActive && (
-                      <span className="absolute bottom-1.5 right-1.5 w-2.5 h-2.5 rounded-full bg-ok animate-pulse" />
+                      <span className={`absolute bottom-1.5 right-1.5 w-2.5 h-2.5 rounded-full ${proctorWarning ? 'bg-bad animate-ping' : 'bg-ok animate-pulse'}`} />
                     )}
                   </div>
                   <div>
                     <div className="flex items-center gap-2">
                       <span className="text-xs font-bold uppercase tracking-wider text-amber flex items-center gap-1.5">
-                        <span>📹</span> Proctor Video Check
+                        <span>📹</span> AI Vision Proctor
                       </span>
                       <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold border ${
                         proctorVideoActive
-                          ? 'bg-ok/15 text-ok border-ok/30'
+                          ? proctorWarning
+                            ? 'bg-bad/15 text-bad border-bad/30'
+                            : 'bg-ok/15 text-ok border-ok/30'
                           : 'bg-muted/15 text-muted border-muted/30'
                       }`}>
-                        {proctorVideoActive ? 'LIVE • VERIFIED' : 'STANDBY'}
+                        {proctorVideoActive ? (proctorWarning ? 'ALERT DETECTED' : 'LIVE • VERIFIED') : 'STANDBY'}
                       </span>
+                      {isProctorScanning && (
+                        <span className="text-[10px] font-mono text-amber animate-pulse">Scanning...</span>
+                      )}
+                      {proctorViolations > 0 && (
+                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-bad/15 text-bad font-mono font-bold">
+                          {proctorViolations} flag{proctorViolations > 1 ? 's' : ''}
+                        </span>
+                      )}
                     </div>
-                    <p className="text-xs text-ink font-semibold mt-0.5">{proctorStatus}</p>
-                    <p className="text-[11px] text-muted">Webcam presence monitored for testing authenticity and peer validation.</p>
+                    <p className={`text-xs font-semibold mt-0.5 ${proctorWarning ? 'text-bad' : 'text-ink'}`}>{proctorStatus}</p>
+                    <p className="text-[11px] text-muted">Webcam vision scanning active for unauthorized phones, textbooks, or notebooks.</p>
                   </div>
                 </div>
                 {!proctorVideoActive && (
@@ -778,6 +874,26 @@ export default function OnboardingPage() {
                   </button>
                 )}
               </div>
+
+              {/* Active Violation / Proctor Alert Banner */}
+              {proctorWarning && (
+                <div className="p-4 bg-bad/15 border-2 border-bad rounded-2xl flex items-center justify-between gap-3 text-bad animate-pulse shadow-sm">
+                  <div className="flex items-center gap-2.5">
+                    <span className="text-2xl shrink-0">🚨</span>
+                    <div>
+                      <h4 className="text-xs font-bold uppercase tracking-wider">Academic Integrity Alert • AI Vision Proctor</h4>
+                      <p className="text-xs font-medium text-ink mt-0.5">{proctorWarning}</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setProctorWarning(null)}
+                    className="text-xs px-2.5 py-1 bg-bad/20 hover:bg-bad/30 rounded-lg text-bad font-bold cursor-pointer transition-colors shrink-0"
+                  >
+                    Dismiss Warning
+                  </button>
+                </div>
+              )}
 
               {/* ─── QUIZ 1: 10 Diagnostic Placement Questions ─── */}
               {quizPhase === 'diagnostic' && (
