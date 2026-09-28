@@ -58,9 +58,10 @@ export async function GET(req: Request) {
           if (!error && Array.isArray(data)) {
             const now = Date.now();
             for (const c of data) {
-              const ageMs = now - new Date(c.created_at).getTime();
-              if (ageMs > 30000) {
-                // Expired ring -> mark missed
+              const createdTime = c.created_at ? new Date(c.created_at).getTime() : now;
+              const ageMs = now - createdTime;
+              if (ageMs > 120000 && !isNaN(ageMs)) {
+                // Expired ring after 2 minutes -> mark missed
                 await supabase.from('calls').update({ status: 'missed' }).eq('id', c.id);
               } else {
                 activeCalls.push(c);

@@ -10,6 +10,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const [profile, setProfile] = useState<any>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [globalIncomingCall, setGlobalIncomingCall] = useState<any>(null);
+  const globalIncomingCallRef = useRef<any>(null);
+  useEffect(() => {
+    globalIncomingCallRef.current = globalIncomingCall;
+  }, [globalIncomingCall]);
   const dismissedCallIdsRef = useRef<Set<string>>(new Set());
   const pathname = usePathname();
   const router = useRouter();
@@ -121,6 +125,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           if (Array.isArray(data.calls) && data.calls.length > 0) {
             const active = data.calls.find((c: any) => !dismissedCallIdsRef.current.has(c.id) && c.status === 'ringing');
             if (active) {
+              if (globalIncomingCallRef.current?.id === active.id) {
+                return;
+              }
               const displayName = encodeURIComponent(myEmailLower.split('@')[0] || 'Peer');
               const callUrl = `https://meet.jit.si/${active.room_name}#config.startWithVideoMuted=${active.type === 'voice'}&config.prejoinPageEnabled=false&config.disableDeepLinking=true&userInfo.displayName="${displayName}"`;
               setGlobalIncomingCall({
@@ -133,10 +140,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                 callUrl,
                 callMode: active.type === 'voice' ? 'voice' : 'video',
               });
-            } else {
+            } else if (globalIncomingCallRef.current) {
               setGlobalIncomingCall(null);
             }
-          } else {
+          } else if (globalIncomingCallRef.current) {
             setGlobalIncomingCall(null);
           }
         }

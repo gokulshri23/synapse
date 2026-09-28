@@ -174,7 +174,7 @@ export default function ChatWindow({
     if (!threadId) return;
 
     fetchMessages();
-    const pollInterval = setInterval(fetchMessages, 3500);
+    const pollInterval = setInterval(fetchMessages, 1000);
 
     const supabase = createClient();
     const channelName = `chat_${threadId.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
@@ -290,6 +290,7 @@ export default function ChatWindow({
             : m
         )
       );
+      fetchMessages();
     } catch (err) {
       setMessages((prev) =>
         prev.map((m) => (m.id === tempId ? { ...m, status: 'failed' } : m))

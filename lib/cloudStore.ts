@@ -2738,11 +2738,12 @@ export function getIncomingCallsForUser(userId: string): CloudCallRecord[] {
 
   for (const c of Object.values(store.calls)) {
     if (c.callee_id === normUser) {
-      const ageMs = now - new Date(c.created_at).getTime();
-      // Ring timeout 30s -> mark as missed
-      if (c.status === 'ringing' && ageMs > 30000) {
+      const createdTime = c.created_at ? new Date(c.created_at).getTime() : now;
+      const ageMs = now - createdTime;
+      // Ring timeout 120s -> mark as missed
+      if (c.status === 'ringing' && ageMs > 120000 && !isNaN(ageMs)) {
         c.status = 'missed';
-      } else if (c.status === 'ringing' && ageMs <= 60000) {
+      } else if (c.status === 'ringing') {
         results.push(c);
       }
     }

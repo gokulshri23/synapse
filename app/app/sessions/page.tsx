@@ -263,6 +263,10 @@ function useAsync(asyncFn) {
     connectionId?: string;
   } | null>(null);
   const dismissedCallIdsRef = useRef<Set<string>>(new Set());
+  const incomingCallRef = useRef<any>(null);
+  useEffect(() => {
+    incomingCallRef.current = incomingCall;
+  }, [incomingCall]);
 
   // ─── Call Rebuild UI States ──────────────────────────────────
   const [isOutgoingCalling, setIsOutgoingCalling] = useState(false);
@@ -744,7 +748,7 @@ function useAsync(asyncFn) {
     // Periodic backup sync (fallback if websocket disconnected)
     const pollInterval = setInterval(() => {
       fetchThreadMessages(currentThreadId);
-    }, 3000);
+    }, 1000);
 
     // Supabase Realtime INSERT subscription
     const supabase = createClient();
@@ -816,6 +820,10 @@ function useAsync(asyncFn) {
               (c: any) => !dismissedCallIdsRef.current.has(c.id) && c.status === 'ringing'
             );
             if (activeCall && !isCallModalOpen) {
+              // Avoid flickering or state thrashing if already displaying this call
+              if (incomingCallRef.current?.callId === activeCall.id) {
+                return;
+              }
               const displayName = encodeURIComponent((studentName || 'Learner').split(' ')[0]);
               const callUrl = `https://meet.jit.si/${activeCall.room_name}#config.startWithVideoMuted=${activeCall.type === 'voice'}&config.prejoinPageEnabled=false&config.disableDeepLinking=true&userInfo.displayName="${displayName}"`;
               setIncomingCall({
@@ -828,10 +836,10 @@ function useAsync(asyncFn) {
                 callId: activeCall.id,
                 connectionId: activeCall.connection_id,
               });
-            } else if (!activeCall && incomingCall) {
+            } else if (!activeCall && incomingCallRef.current) {
               setIncomingCall(null);
             }
-          } else if (incomingCall) {
+          } else if (incomingCallRef.current) {
             setIncomingCall(null);
           }
         }
@@ -860,7 +868,7 @@ function useAsync(asyncFn) {
             payload.new &&
             (payload.new.status === 'ended' || payload.new.status === 'declined' || payload.new.status === 'missed')
           ) {
-            if (incomingCall?.callId === payload.new.id) {
+            if (incomingCallRef.current?.callId === payload.new.id) {
               setIncomingCall(null);
             }
           }
@@ -873,7 +881,7 @@ function useAsync(asyncFn) {
       clearInterval(interval);
       supabase.removeChannel(channel);
     };
-  }, [studentEmail, studentName, isCallModalOpen, incomingCall]);
+  }, [studentEmail, studentName, isCallModalOpen]);
 
   // If in an active call, observe call status changes so ending call on one device ends it on both!
   useEffect(() => {
@@ -2750,16 +2758,16 @@ function useAsync(asyncFn) {
                 )
               }
             >
-              <DailyPrebuiltCall
-                roomName={activeCallSessionId}
-                roomUrl={callUrl || `https://meet.jit.si/${activeCallSessionId}`}
-                token={callToken || undefined}
+              <NativeCallView
                 mode={callMode}
-                callId={currentCallId || undefined}
+                peerName={activePeer.name}
                 currentUserName={studentName}
                 currentUserEmail={studentEmail}
-                peerName={activePeer.name}
                 peerEmail={activePeer.id}
+                sessionId={activeCallSessionId}
+                callId={currentCallId || undefined}
+                roomName={activeCallSessionId}
+                isInitiator={isCallInitiator}
                 onEndCall={handleEndCall}
               />
             </InCallShell>

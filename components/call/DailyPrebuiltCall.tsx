@@ -204,6 +204,11 @@ export default function DailyPrebuiltCall({
 
       jitsiApiRef.current = api;
 
+      // Auto dismiss loading overlay after 3 seconds so user is never trapped in black screen
+      setTimeout(() => {
+        setIsLoading(false);
+      }, 3000);
+
       // Event handlers
       let hasJoined = false;
       api.addListener('videoConferenceJoined', (event: any) => {
