@@ -48,8 +48,11 @@ export async function POST(req: NextRequest) {
     // Reliable open WebRTC room (works immediately on desktop and mobile browsers)
     let callUrl = `https://meet.jit.si/${roomName}#config.startWithVideoMuted=${mode === 'voice'}&config.prejoinPageEnabled=false&config.disableDeepLinking=true&userInfo.displayName="${displayName}"&config.toolbarButtons=%5B'microphone','camera','desktop','chat','raisehand','tileview','hangup'%5D`;
 
+    let token = `tok_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+
     if (process.env.DAILY_API_KEY) {
       try {
+        // 1. Create or get room
         const dailyRes = await fetch('https://api.daily.co/v1/rooms', {
           method: 'POST',
           headers: {
@@ -58,15 +61,21 @@ export async function POST(req: NextRequest) {
           },
           body: JSON.stringify({
             name: roomName,
+            privacy: 'private',
             properties: {
+              max_participants: 2,
               enable_chat: false,
               enable_screenshare: true,
+              enable_prejoin_ui: false,
+              enable_knocking: false,
               start_video_off: mode === 'voice',
               start_audio_off: false,
               exp: Math.floor(Date.now() / 1000) + 7200,
+              eject_at_room_exp: true,
             },
           }),
         });
+
         if (dailyRes.ok) {
           const roomData = await dailyRes.json();
           callUrl = roomData.url;
@@ -80,6 +89,34 @@ export async function POST(req: NextRequest) {
             callUrl = existingRoom.url;
           }
         }
+
+        // 2. Issue meeting token for this user
+        const tokenRes = await fetch('https://api.daily.co/v1/meeting-tokens', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${process.env.DAILY_API_KEY}`,
+          },
+          body: JSON.stringify({
+            properties: {
+              room_name: roomName,
+              user_name: userId.split('@')[0] || 'Learner',
+              user_id: normUser,
+              enable_screenshare: true,
+              start_video_off: mode === 'voice',
+              start_audio_off: false,
+              is_owner: false,
+              exp: Math.floor(Date.now() / 1000) + 7200,
+            },
+          }),
+        });
+
+        if (tokenRes.ok) {
+          const tokenJson = await tokenRes.json();
+          if (tokenJson.token) {
+            token = tokenJson.token;
+          }
+        }
       } catch (e) {
         console.warn('[call-token] Daily API call failed, using secure Jitsi URL:', e);
       }
@@ -90,8 +127,8 @@ export async function POST(req: NextRequest) {
       roomName,
       callUrl,
       mode,
-      token: `tok_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
-      expiresIn: 3600,
+      token,
+      expiresIn: 7200,
     });
   } catch (err: any) {
     return NextResponse.json({ success: false, error: err?.message || 'Server error' }, { status: 500 });

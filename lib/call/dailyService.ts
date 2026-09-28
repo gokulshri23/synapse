@@ -13,6 +13,8 @@ interface DailyRoomProperties {
     enable_chat: boolean;
     exp: number;
     eject_at_room_exp?: boolean;
+    enable_prejoin_ui?: boolean;
+    enable_knocking?: boolean;
     start_video_off?: boolean;
     start_audio_off?: boolean;
   };
@@ -69,6 +71,8 @@ export async function createDailyRoom(params: {
         enable_chat: false, // We use Synapse's persisted chat
         exp: expiry,
         eject_at_room_exp: true,
+        enable_prejoin_ui: params.type === 'group', // Pre-join off for pair calls (Accept click is user gesture)
+        enable_knocking: false,
       },
     };
 

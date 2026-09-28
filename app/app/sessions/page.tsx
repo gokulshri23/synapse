@@ -4,6 +4,13 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import PreJoinModal from '@/components/call/PreJoinModal';
 import StudyRoomView from '@/components/call/StudyRoomView';
 import NativeCallView from '@/components/call/NativeCallView';
+import DailyPrebuiltCall from '@/components/call/DailyPrebuiltCall';
+import {
+  OutgoingCallScreen,
+  IncomingCallScreen,
+  InCallShell,
+  PostCallWrapUpModal,
+} from '@/components/call/CallScreens';
 import { createClient } from '@/lib/supabase/client';
 import SessionSummaryCard from '@/components/adaptive/SessionSummaryCard';
 import WhyThisModal from '@/components/adaptive/WhyThisModal';
@@ -247,6 +254,14 @@ function useAsync(asyncFn) {
     connectionId?: string;
   } | null>(null);
   const dismissedCallIdsRef = useRef<Set<string>>(new Set());
+
+  // ─── Call Rebuild UI States ──────────────────────────────────
+  const [isOutgoingCalling, setIsOutgoingCalling] = useState(false);
+  const [callToken, setCallToken] = useState<string | null>(null);
+  const [lastCallDuration, setLastCallDuration] = useState(0);
+  const [showPostCallWrapUp, setShowPostCallWrapUp] = useState(false);
+  const [wasCallMissed, setWasCallMissed] = useState(false);
+  const [isThreadChatDrawerOpen, setIsThreadChatDrawerOpen] = useState(false);
 
   // ─── Study Rooms ("Start Learning Session") State ────────────
   const [studyRooms, setStudyRooms] = useState<any[]>([]);
@@ -731,6 +746,37 @@ function useAsync(asyncFn) {
     const interval = setInterval(checkCallStatus, 1500);
     return () => clearInterval(interval);
   }, [currentCallId, isCallModalOpen]);
+
+  // Monitor if callee accepts or declines outgoing call
+  useEffect(() => {
+    if (!isOutgoingCalling || !currentCallId) return;
+
+    let isSubscribed = true;
+    const checkAccepted = async () => {
+      try {
+        const res = await fetch(`/api/calls?callId=${encodeURIComponent(currentCallId)}`);
+        if (res.ok && isSubscribed) {
+          const data = await res.json();
+          if (data.call) {
+            if (data.call.status === 'accepted') {
+              setIsOutgoingCalling(false);
+              setIsCallModalOpen(true);
+            } else if (data.call.status === 'declined' || data.call.status === 'missed') {
+              setIsOutgoingCalling(false);
+              setWasCallMissed(true);
+              setShowPostCallWrapUp(true);
+            }
+          }
+        }
+      } catch (e) {}
+    };
+
+    const interval = setInterval(checkAccepted, 1000);
+    return () => {
+      isSubscribed = false;
+      clearInterval(interval);
+    };
+  }, [isOutgoingCalling, currentCallId]);
 
   // ─── Incoming Call Audio Ring Chime ───────────────────────────
   useEffect(() => {
@@ -1388,11 +1434,8 @@ function useAsync(asyncFn) {
     const initialRoomName = `pair-${connId}`;
     setActiveCallSessionId(initialRoomName);
     setIsCallInitiator(true);
-
-    setCallConnecting(true);
     setCallMode(mode);
-    setCallTimeout(false);
-    setIsCallModalOpen(true);
+    setIsOutgoingCalling(true);
 
     try {
       // 1. Post to /api/calls for isolated signaling and database registration
@@ -1428,31 +1471,36 @@ function useAsync(asyncFn) {
       });
 
       const data = await tokenRes.json();
-      if (!tokenRes.ok || !data.success) {
-        showToast(data.error || 'Live calls could not connect. Check network connection.');
-        setIsCallModalOpen(false);
-        setCallConnecting(false);
-        return;
+      if (data.success) {
+        setCallUrl(data.callUrl);
+        setCallToken(data.token);
+      } else {
+        setCallUrl(`https://meet.jit.si/${serverRoomName}`);
       }
-
-      setCallUrl(data.callUrl);
-      setCallConnecting(false);
-
-      // 15s connection timeout check
-      const timer = setTimeout(() => {
-        setCallTimeout(true);
-      }, 15000);
-      return () => clearTimeout(timer);
     } catch (e: any) {
       showToast('Call service error. Please try again.');
-      setIsCallModalOpen(false);
-      setCallConnecting(false);
+      setIsOutgoingCalling(false);
+    }
+  };
+
+  const handleCancelOutgoingCall = async () => {
+    setIsOutgoingCalling(false);
+    if (currentCallId) {
+      fetch('/api/calls', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ callId: currentCallId, status: 'missed' }),
+      }).catch(() => {});
+      setCurrentCallId(null);
     }
   };
 
   const handleEndCall = async (durationSec = 0) => {
     setIsCallModalOpen(false);
+    setIsOutgoingCalling(false);
     setCallUrl(null);
+    setCallToken(null);
+    setLastCallDuration(durationSec);
 
     if (currentCallId) {
       fetch('/api/calls', {
@@ -1463,18 +1511,8 @@ function useAsync(asyncFn) {
       setCurrentCallId(null);
     }
 
-    // Only show post-call quiz if call was attended for at least 1 minute (60s)
-    if (typeof durationSec === 'number' && durationSec >= 60) {
-      setShowPostCallQuiz(true);
-      setPostCallAnswers([-1, -1, -1]);
-      setPostCallSubmitted(false);
-      const mins = Math.floor(durationSec / 60);
-      const secs = durationSec % 60;
-      showToast(`Call ended (${mins}m ${secs}s). Please complete the 3-question peer check.`);
-    } else {
-      setShowPostCallQuiz(false);
-      showToast(`Call ended (${durationSec}s). Calls under 1 minute do not require a post-call check.`);
-    }
+    setWasCallMissed(false);
+    setShowPostCallWrapUp(true);
   };
 
   const handleAcceptIncomingCall = async () => {
@@ -1515,11 +1553,35 @@ function useAsync(asyncFn) {
 
     setActiveCallSessionId(serverRoomName);
     setIsCallInitiator(false);
-    setCallUrl(incomingCall.callUrl);
     setCallMode(incomingCall.callMode);
+
+    // Issue meeting token for callee
+    const myId = (studentEmail || studentName || 'user').trim().toLowerCase();
+    try {
+      const tokenRes = await fetch('/api/call-token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: myId,
+          peerEmail: callerId,
+          mode: incomingCall.callMode,
+          sessionId: serverRoomName,
+          roomName: serverRoomName,
+        }),
+      });
+      const data = await tokenRes.json();
+      if (data.success) {
+        setCallUrl(data.callUrl);
+        setCallToken(data.token);
+      } else {
+        setCallUrl(incomingCall.callUrl);
+      }
+    } catch (e) {
+      setCallUrl(incomingCall.callUrl);
+    }
+
     setIsCallModalOpen(true);
     setIncomingCall(null);
-    showToast(`Connected to live ${incomingCall.callMode} call with ${callerName}!`);
   };
 
   const handleDeclineIncomingCall = async () => {
@@ -1839,41 +1901,14 @@ function useAsync(asyncFn) {
         </div>
       )}
 
-      {/* ─── Part 6: Live Incoming Call Notification Banner ──── */}
+      {/* ─── Part 2: Incoming Call Screen Modal ──── */}
       {incomingCall && (
-        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[250] max-w-lg w-[92%] bg-card border-2 border-amber rounded-2xl shadow-2xl p-4 animate-slide-down flex items-center justify-between gap-4 backdrop-blur-md">
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-2xl bg-amber/20 text-amber flex items-center justify-center text-2xl animate-bounce shrink-0">
-              {incomingCall.callMode === 'voice' ? '📞' : '📹'}
-            </div>
-            <div>
-              <span className="text-[10px] font-bold uppercase tracking-wider text-amber block">
-                Incoming Live {incomingCall.callMode === 'voice' ? 'Voice' : 'Video'} Call
-              </span>
-              <p className="font-serif font-bold text-sm text-ink truncate max-w-[180px] sm:max-w-xs">
-                {incomingCall.callerName} is calling you...
-              </p>
-              <span className="text-[11px] text-muted flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                Ringing live • Tap Accept to join
-              </span>
-            </div>
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            <button
-              onClick={handleAcceptIncomingCall}
-              className="py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow-md transition-all active:scale-95 flex items-center gap-1.5 cursor-pointer"
-            >
-              <span>📞</span> Accept
-            </button>
-            <button
-              onClick={handleDeclineIncomingCall}
-              className="py-2 px-3 bg-bad/10 hover:bg-bad/20 text-bad font-semibold text-xs rounded-xl border border-bad/30 transition-colors cursor-pointer"
-            >
-              Decline
-            </button>
-          </div>
-        </div>
+        <IncomingCallScreen
+          callerName={incomingCall.callerName}
+          mode={incomingCall.callMode}
+          onAccept={handleAcceptIncomingCall}
+          onDecline={handleDeclineIncomingCall}
+        />
       )}
 
       {/* ─── Active Fullscreen Study Room View ─────────────────────── */}
@@ -2504,24 +2539,87 @@ function useAsync(asyncFn) {
         </div>
       )}
 
-      {/* ─── Part 6: Live Call Modal ─────────────────────────────── */}
+      {/* ─── Part 2: Outgoing Call Screen ──────────────────────────── */}
+      {isOutgoingCalling && (
+        <OutgoingCallScreen
+          friendName={activePeer.name}
+          mode={callMode}
+          onCancel={handleCancelOutgoingCall}
+          onRetry={() => handleStartCall(callMode)}
+          onSendMessage={() => {
+            setIsOutgoingCalling(false);
+          }}
+        />
+      )}
+
+      {/* ─── Part 1 & 2: In-Call Shell & Daily Prebuilt Window ──────── */}
       {isCallModalOpen && (
-        <div className="fixed inset-0 z-[120] bg-ink/75 backdrop-blur-md flex items-center justify-center p-3 sm:p-6 animate-fade-in">
-          <div className="bg-[#1C1917] border border-border/30 rounded-[28px] max-w-4xl w-full h-[580px] p-2 sm:p-3 shadow-2xl flex flex-col overflow-hidden relative">
-            <NativeCallView
-              mode={callMode}
-              peerName={activePeer.name}
-              currentUserName={studentName}
-              currentUserEmail={studentEmail}
-              peerEmail={activePeer.id}
-              sessionId={activeCallSessionId || getSessionId()}
-              callId={currentCallId || undefined}
-              roomName={activeCallSessionId || undefined}
-              isInitiator={isCallInitiator}
-              onEndCall={handleEndCall}
-            />
+        <div className="fixed inset-0 z-[120] bg-ink/80 backdrop-blur-md flex items-center justify-center p-2 sm:p-4 animate-fade-in">
+          <div className="bg-[#1C1917] border border-border/30 rounded-[28px] max-w-5xl w-full h-[88vh] max-h-[720px] shadow-2xl flex flex-col overflow-hidden relative">
+            <InCallShell
+              friendName={activePeer.name}
+              topic={studentTrack ? `${studentTrack} Track` : undefined}
+              callDuration={lastCallDuration}
+              isChatOpen={isThreadChatDrawerOpen}
+              onToggleChat={() => setIsThreadChatDrawerOpen(!isThreadChatDrawerOpen)}
+              onLeaveCall={() => handleEndCall(lastCallDuration)}
+              chatDrawer={
+                activePeer.connectionId ? (
+                  <ChatWindow
+                    key={activePeer.connectionId}
+                    threadId={activePeer.connectionId}
+                    threadType="pair"
+                    connectionId={activePeer.connectionId}
+                    studentName={studentName}
+                    studentEmail={studentEmail}
+                    studentTrack={studentTrack}
+                    activePeer={activePeer}
+                    isConnectionAccepted={true}
+                    onStartCall={handleStartCall}
+                    showToast={showToast}
+                  />
+                ) : (
+                  <div className="p-4 text-xs text-muted">No active thread chat found.</div>
+                )
+              }
+            >
+              <DailyPrebuiltCall
+                roomName={activeCallSessionId}
+                roomUrl={callUrl || `https://meet.jit.si/${activeCallSessionId}`}
+                token={callToken || undefined}
+                mode={callMode}
+                callId={currentCallId || undefined}
+                currentUserName={studentName}
+                currentUserEmail={studentEmail}
+                peerName={activePeer.name}
+                peerEmail={activePeer.id}
+                onEndCall={handleEndCall}
+              />
+            </InCallShell>
           </div>
         </div>
+      )}
+
+      {/* ─── Part 2: Post-Call Wrap-Up Modal ───────────────────────── */}
+      {showPostCallWrapUp && (
+        <PostCallWrapUpModal
+          friendName={activePeer.name}
+          durationSeconds={lastCallDuration}
+          wasMissed={wasCallMissed}
+          onTakeQuiz={() => {
+            setShowPostCallWrapUp(false);
+            if (lastCallDuration >= 60) {
+              setShowPostCallQuiz(true);
+              setPostCallAnswers([-1, -1, -1]);
+              setPostCallSubmitted(false);
+            }
+          }}
+          onClose={() => setShowPostCallWrapUp(false)}
+          onRetryCall={() => {
+            setShowPostCallWrapUp(false);
+            handleStartCall(callMode);
+          }}
+        />
       )}
 
       {/* ─── Part 6: Post-Call Understanding Check (3-Question Rigorous Check) ─── */}
