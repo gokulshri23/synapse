@@ -29,7 +29,7 @@ export default function SkillsPage() {
   } | null>(null);
   const [completedDays, setCompletedDays] = useState<string[]>([]);
 
-  // Interactive Daily Mission Modal State
+  // Interactive Daily Mission / Assessment Modal State
   const [isMissionModalOpen, setIsMissionModalOpen] = useState(false);
   const [missionCode, setMissionCode] = useState('');
   const [isEvaluatingMission, setIsEvaluatingMission] = useState(false);
@@ -40,6 +40,23 @@ export default function SkillsPage() {
     xpGained: number;
   } | null>(null);
   const [missionError, setMissionError] = useState<string | null>(null);
+
+  // Part 2 Daily Assessment (4 MCQs + 1 Short-Answer) State
+  const [dailyAssessmentQuestions, setDailyAssessmentQuestions] = useState<{
+    mcqs: Array<{ id: string; question: string; options: string[] }>;
+    short_answer: { id: string; question: string };
+  } | null>(null);
+  const [mcqAnswers, setMcqAnswers] = useState<Record<string, number>>({});
+  const [shortAnswerText, setShortAnswerText] = useState('');
+  const [isSubmittingAssessment, setIsSubmittingAssessment] = useState(false);
+  const [assessmentResult, setAssessmentResult] = useState<{
+    score: number;
+    passed: boolean;
+    xpEarned: number;
+    shortAnswerFeedback: string;
+    mcqScore?: number;
+    shortAnswerScore?: number;
+  } | null>(null);
 
   // College-style Skill Test Modal State
   const [activeTestSkill, setActiveTestSkill] = useState<string | null>(null);
@@ -87,59 +104,79 @@ export default function SkillsPage() {
     setLevel(userLevel);
     setScore(userScore);
 
-    // Generate dynamic skill nodes strictly based on domain, level, and diagnostic score
-    let activeSkillsTree: Skill[] = [];
-    const userSafe = (userMail || userName || 'user').toLowerCase().replace(/[^a-z0-9]/g, '_');
-    const domainSafe = (userDomain || 'react').toLowerCase().replace(/[^a-z0-9]/g, '_');
-    const savedSkillsKey = `synapse_skills_${userSafe}_${domainSafe}`;
-    const savedSkillsRaw = localStorage.getItem(savedSkillsKey);
-
-    if (savedSkillsRaw) {
-      try {
-        const parsedTree = JSON.parse(savedSkillsRaw);
-        if (Array.isArray(parsedTree) && parsedTree.length > 0) {
-          // STRICT FIX: If user scored 0% or <= 20% on test or level is 0,
-          // but cached tree has Sector 1 mastered (>= 80%) or Sector 2 unlocked, invalidate stale cache!
-          const isStale = (userScore <= 20 || userLevel === '0') && (parsedTree[0]?.mastery_pct >= 80 || parsedTree[1]?.status !== 'locked');
-          if (!isStale) {
-            activeSkillsTree = parsedTree;
-          }
-        }
-      } catch (e) {}
-    }
-
-    if (!activeSkillsTree || activeSkillsTree.length === 0) {
-      activeSkillsTree = generateSkillTree(userDomain, userLevel, userScore);
-      try {
-        localStorage.setItem(savedSkillsKey, JSON.stringify(activeSkillsTree));
-      } catch (e) {}
-    }
-
-    setSkills(activeSkillsTree);
-
-    // Fetch dynamic daily mission tied to next incomplete roadmap topic
-    const nextTopic = activeSkillsTree.find(s => s.status !== 'mastered') || activeSkillsTree[0];
-    const topicName = nextTopic ? nextTopic.name : userDomain;
     const idToUse = userMail || userName || 'learner_default';
 
-    fetch(`/api/daily-missions?userId=${encodeURIComponent(idToUse)}&topic=${encodeURIComponent(topicName)}`)
-      .then(res => res.json())
-      .then(data => {
-        const m = data.currentMission || data.mission;
-        if (m) {
-          setMissionData(m);
-          if (m.starterCode) {
-            setMissionCode(m.starterCode);
-          }
-          if (m.completedAt) {
-            setMissionDone(true);
-          }
-        }
-        if (Array.isArray(data.completedDays)) {
-          setCompletedDays(data.completedDays);
+    // Part 3: Fetch persistent roadmap nodes from database/cloudStore
+    fetch(`/api/roadmap?userId=${encodeURIComponent(idToUse)}&skill=${encodeURIComponent(userDomain)}`)
+      .then((res) => res.json())
+      .then((data) => {
+        let activeNodes = data.nodes || [];
+        if (!activeNodes || activeNodes.length === 0) {
+          // Apply entry score idempotently
+          fetch('/api/roadmap', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'apply-entry',
+              userId: idToUse,
+              skill: userDomain,
+              score: userScore,
+            }),
+          })
+            .then((r) => r.json())
+            .then((applied) => {
+              if (applied.nodes) {
+                renderRoadmapFromNodes(applied.nodes, userDomain, idToUse);
+              }
+            })
+            .catch(() => {});
+        } else {
+          renderRoadmapFromNodes(activeNodes, userDomain, idToUse);
         }
       })
-      .catch(() => {});
+      .catch(() => {
+        const fallbackTree = generateSkillTree(userDomain, userLevel, userScore);
+        setSkills(fallbackTree);
+      });
+
+    function renderRoadmapFromNodes(nodes: any[], domainName: string, userId: string) {
+      const mappedSkills: Skill[] = nodes.map((node: any, idx: number) => ({
+        id: node.id || `rn_${idx}`,
+        user_id: userId,
+        name: node.topic,
+        mastery_pct: node.status === 'completed' ? 95 : node.status === 'unlocked' ? 45 : 0,
+        level: Math.floor(idx / 2) + 1,
+        status: node.status === 'completed' ? 'mastered' : node.status === 'unlocked' ? 'active' : 'locked',
+        parent_skill_id: null,
+        description: `Core proficiency node for ${node.topic}`,
+        order_index: node.order_index ?? idx,
+      }));
+
+      setSkills(mappedSkills);
+
+      // Fetch dynamic daily mission tied to next incomplete roadmap topic
+      const nextTopic = mappedSkills.find((s) => s.status !== 'mastered') || mappedSkills[0];
+      const topicName = nextTopic ? nextTopic.name : domainName;
+
+      fetch(`/api/daily-missions?userId=${encodeURIComponent(userId)}&topic=${encodeURIComponent(topicName)}`)
+        .then((res) => res.json())
+        .then((data) => {
+          const m = data.currentMission || data.mission;
+          if (m) {
+            setMissionData(m);
+            if (m.starterCode) {
+              setMissionCode(m.starterCode);
+            }
+            if (m.completedAt) {
+              setMissionDone(true);
+            }
+          }
+          if (Array.isArray(data.completedDays)) {
+            setCompletedDays(data.completedDays);
+          }
+        })
+        .catch(() => {});
+    }
   }, []);
 
   // Compute College Grade & GPA
@@ -158,11 +195,71 @@ export default function SkillsPage() {
   const currentCollegeGrade = computeCollegeGrade(avgMastery);
 
   const handleOpenMissionModal = () => {
-    if (!missionCode && missionData?.starterCode) {
-      setMissionCode(missionData.starterCode);
+    setIsMissionModalOpen(true);
+    setMissionError(null);
+    const idToUse = studentEmail || studentName || 'learner_default';
+    fetch(`/api/daily-missions?userId=${encodeURIComponent(idToUse)}&topic=${encodeURIComponent(domain)}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.assessment?.questions) {
+          setDailyAssessmentQuestions(data.assessment.questions);
+          if (data.assessment.completedAt && data.assessment.score !== null) {
+            setAssessmentResult({
+              score: data.assessment.score,
+              passed: data.assessment.score >= 60,
+              xpEarned: data.assessment.xpAwarded || 0,
+              shortAnswerFeedback: 'Graded and saved for today.',
+              mcqScore: Math.round(data.assessment.score * 0.8),
+              shortAnswerScore: Math.round(data.assessment.score * 0.2),
+            });
+          }
+        }
+      })
+      .catch(() => {});
+  };
+
+  const handleSubmitDailyAssessment = async () => {
+    const hasAnyMcq = Object.keys(mcqAnswers).length > 0;
+    const cleanShort = shortAnswerText.trim();
+    if (!hasAnyMcq && cleanShort.length === 0) {
+      setMissionError('Please select at least one MCQ or enter a short answer.');
+      return;
     }
     setMissionError(null);
-    setIsMissionModalOpen(true);
+    setIsSubmittingAssessment(true);
+    try {
+      const idToUse = studentEmail || studentName || 'learner_default';
+      const today = new Date().toISOString().split('T')[0];
+      const res = await fetch('/api/daily-missions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: idToUse,
+          date: today,
+          mcqAnswers,
+          shortAnswerText: cleanShort,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setAssessmentResult(data);
+        if (data.xpEarned > 0) {
+          const nextXp = userXp + data.xpEarned;
+          setUserXp(nextXp);
+          localStorage.setItem('synapse_user_xp', nextXp.toString());
+        }
+        if (data.passed) {
+          setMissionDone(true);
+          localStorage.setItem('synapse_mission_done', 'true');
+        }
+      } else {
+        setMissionError(data.error || 'Evaluation failed.');
+      }
+    } catch (err: any) {
+      setMissionError(err?.message || 'Server error.');
+    } finally {
+      setIsSubmittingAssessment(false);
+    }
   };
 
   const handleExecuteMissionSubmission = async () => {
@@ -317,6 +414,21 @@ export default function SkillsPage() {
 
       return updated;
     });
+
+    if (result.score >= 70) {
+      const idToUse = studentEmail || studentName || 'learner_default';
+      fetch('/api/roadmap', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'pass-topic',
+          userId: idToUse,
+          skill: domain,
+          topic: result.skill,
+          score: result.score,
+        }),
+      }).catch(() => {});
+    }
 
     const newScore = Math.min(100, Math.round((score * 0.5) + (result.score * 0.5)));
     setScore(newScore);
@@ -765,128 +877,142 @@ export default function SkillsPage() {
               </button>
             </div>
 
-            {/* Problem Statement & Context */}
-            <div className="p-4 rounded-2xl bg-card-alt border border-border space-y-2">
-              <div className="flex items-center gap-2 text-xs font-bold uppercase text-ink">
-                <span>📋</span> Problem Statement & Requirements
-              </div>
-              <p className="text-xs sm:text-sm text-ink leading-relaxed">
-                {missionData?.problemStatement || missionData?.taskText || `Write a production-ready solution implementing ${domain} concepts.`}
-              </p>
-              {missionData?.solutionHint && (
-                <div className="pt-2 border-t border-border/60 text-xs text-muted flex items-start gap-2">
-                  <span className="text-amber">💡</span>
-                  <span><strong>Hint:</strong> {missionData.solutionHint}</span>
-                </div>
-              )}
-            </div>
-
-            {/* Code Editor */}
-            <div className="space-y-2">
-              <div className="flex justify-between items-center text-xs">
-                <span className="font-bold text-ink uppercase tracking-wider flex items-center gap-1.5">
-                  <span>💻</span> Solution Editor
-                </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (missionData?.starterCode) {
-                      setMissionCode(missionData.starterCode);
-                    }
-                  }}
-                  className="text-[11px] text-muted hover:text-amber transition-colors cursor-pointer"
-                >
-                  ↺ Reset Starter Code
-                </button>
-              </div>
-
-              <div className="relative rounded-2xl border border-border overflow-hidden bg-[#1E1E1E] text-white shadow-inner">
-                <div className="flex items-center justify-between px-4 py-2 bg-[#2D2D2D] border-b border-[#3D3D3D] text-[11px] text-gray-400 font-mono">
-                  <span>solution.ts</span>
-                  <span>UTF-8 • Strict Mode</span>
-                </div>
-                <textarea
-                  value={missionCode}
-                  onChange={(e) => {
-                    setMissionCode(e.target.value);
-                    if (missionError) setMissionError(null);
-                  }}
-                  disabled={isEvaluatingMission}
-                  rows={14}
-                  placeholder="// Type your implementation code here..."
-                  className="w-full p-4 font-mono text-xs sm:text-sm bg-transparent text-gray-200 resize-none outline-none leading-relaxed border-none focus:ring-0"
-                  spellCheck={false}
-                />
-              </div>
-            </div>
-
-            {/* Error Message */}
-            {missionError && (
-              <div className="p-3.5 rounded-xl bg-bad/10 border border-bad/30 text-bad text-xs flex items-center gap-2">
-                <span>⚠️</span>
-                <span>{missionError}</span>
-              </div>
-            )}
-
-            {/* Evaluation Results (Celebratory Feedback) */}
-            {missionFeedback && (
-              <div className="p-5 rounded-2xl bg-ok/10 border border-ok/30 space-y-3 animate-fade-in">
+            {/* Assessment Content */}
+            {assessmentResult ? (
+              <div className="p-6 rounded-2xl bg-ok/10 border border-ok/30 space-y-4 animate-fade-in">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <span className="text-2xl">🎉</span>
+                    <span className="text-3xl">🎉</span>
                     <div>
-                      <h4 className="font-bold text-sm text-ok">Mission Evaluated & Verified!</h4>
-                      <span className="text-xs text-muted">+{missionFeedback.xpGained} XP credited • Weekly streak extended!</span>
+                      <h4 className="font-bold text-base text-ok">Daily Assessment Complete!</h4>
+                      <span className="text-xs text-muted">
+                        +{assessmentResult.xpEarned} XP earned • Recorded for today!
+                      </span>
                     </div>
                   </div>
-                  <div className="flex gap-2">
-                    <span className="px-2.5 py-1 rounded-lg bg-ok text-white text-xs font-bold shadow-xs">
-                      {missionFeedback.correctness}% Correct
-                    </span>
-                    <span className="px-2.5 py-1 rounded-lg bg-card border border-border text-ink text-xs font-bold">
-                      {missionFeedback.quality}% Architecture
+                  <div className="text-right">
+                    <span className="px-3 py-1 rounded-xl bg-ok text-white font-mono text-sm font-bold shadow-xs">
+                      {assessmentResult.score}%
                     </span>
                   </div>
                 </div>
 
-                <p className="text-xs sm:text-sm text-ink leading-relaxed p-3 bg-card rounded-xl border border-border/80">
-                  {missionFeedback.notes}
-                </p>
+                <div className="grid grid-cols-2 gap-3 text-xs">
+                  <div className="p-3 bg-card rounded-xl border border-border">
+                    <span className="text-muted block text-[10px] uppercase font-bold">MCQs Score</span>
+                    <span className="text-sm font-bold text-ink">{assessmentResult.mcqScore ?? Math.round(assessmentResult.score * 0.8)} / 80 pts</span>
+                  </div>
+                  <div className="p-3 bg-card rounded-xl border border-border">
+                    <span className="text-muted block text-[10px] uppercase font-bold">Short Answer</span>
+                    <span className="text-sm font-bold text-ink">{assessmentResult.shortAnswerScore ?? Math.round(assessmentResult.score * 0.2)} / 20 pts</span>
+                  </div>
+                </div>
+
+                {assessmentResult.shortAnswerFeedback && (
+                  <div className="p-3.5 bg-card rounded-xl border border-border/80 text-xs">
+                    <span className="font-bold text-ink block mb-1">AI Evaluator Feedback:</span>
+                    <p className="text-muted leading-relaxed">{assessmentResult.shortAnswerFeedback}</p>
+                  </div>
+                )}
+              </div>
+            ) : dailyAssessmentQuestions ? (
+              <div className="space-y-6 max-h-[60vh] overflow-y-auto pr-1">
+                {/* 4 MCQs */}
+                {dailyAssessmentQuestions.mcqs.map((mcq, qIdx) => (
+                  <div key={mcq.id} className="p-4 rounded-2xl bg-card-alt border border-border space-y-3">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-bold uppercase tracking-wider text-amber">
+                        Question {qIdx + 1} of 5 • Multiple Choice (20 pts)
+                      </span>
+                      {mcqAnswers[mcq.id] !== undefined && (
+                        <span className="text-ok font-semibold text-[11px]">Answered ✓</span>
+                      )}
+                    </div>
+                    <p className="text-sm font-medium text-ink leading-relaxed">{mcq.question}</p>
+                    <div className="space-y-2">
+                      {mcq.options.map((opt, oIdx) => (
+                        <button
+                          key={oIdx}
+                          type="button"
+                          onClick={() => setMcqAnswers((prev) => ({ ...prev, [mcq.id]: oIdx }))}
+                          className={`w-full text-left p-3 rounded-xl border text-xs sm:text-sm transition-all flex items-center justify-between cursor-pointer ${
+                            mcqAnswers[mcq.id] === oIdx
+                              ? 'border-amber bg-amber/10 text-amber font-semibold shadow-xs'
+                              : 'border-border bg-card hover:border-amber/40 text-ink'
+                          }`}
+                        >
+                          <span>{opt}</span>
+                          <span
+                            className={`w-4 h-4 rounded-full border flex items-center justify-center text-[10px] shrink-0 ml-2 ${
+                              mcqAnswers[mcq.id] === oIdx ? 'border-amber bg-amber text-white' : 'border-border'
+                            }`}
+                          >
+                            {mcqAnswers[mcq.id] === oIdx ? '✓' : ''}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+
+                {/* 1 Short Answer */}
+                <div className="p-4 rounded-2xl bg-card-alt border border-border space-y-3">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-bold uppercase tracking-wider text-amber">
+                      Question 5 of 5 • Technical Explanation (20 pts)
+                    </span>
+                    <span className={`text-[11px] ${shortAnswerText.trim().length >= 20 ? 'text-ok font-semibold' : 'text-muted'}`}>
+                      {shortAnswerText.trim().length} / 20 min chars
+                    </span>
+                  </div>
+                  <p className="text-sm font-medium text-ink leading-relaxed">
+                    {dailyAssessmentQuestions.short_answer.question}
+                  </p>
+                  <textarea
+                    rows={4}
+                    value={shortAnswerText}
+                    onChange={(e) => setShortAnswerText(e.target.value)}
+                    placeholder="Type your explanation here (minimum 20 characters)..."
+                    className="w-full p-3 text-xs sm:text-sm bg-card border border-border rounded-xl text-ink outline-none focus:border-amber resize-none"
+                  />
+                </div>
+
+                {missionError && (
+                  <div className="p-3 rounded-xl bg-bad/10 border border-bad/30 text-bad text-xs">
+                    ⚠️ {missionError}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="p-8 text-center text-muted text-xs animate-pulse">
+                Loading today&apos;s assessment questions...
               </div>
             )}
 
             {/* Footer Buttons */}
-            <div className="flex items-center justify-between gap-3 pt-2">
+            <div className="flex items-center justify-between gap-3 pt-2 border-t border-border">
               <button
                 type="button"
                 onClick={() => {
                   setIsMissionModalOpen(false);
-                  setMissionFeedback(null);
                   setMissionError(null);
                 }}
                 className="px-5 py-3 rounded-xl border border-border text-xs font-semibold text-muted hover:text-ink cursor-pointer transition-all"
               >
-                {missionFeedback ? 'Return to Roadmap' : 'Cancel'}
+                Close
               </button>
 
-              {!missionFeedback && (
+              {!assessmentResult && (
                 <button
                   type="button"
-                  onClick={handleExecuteMissionSubmission}
-                  disabled={isEvaluatingMission}
-                  className="px-6 py-3 bg-amber hover:bg-terracotta text-white font-bold text-xs sm:text-sm rounded-xl transition-all shadow-md active:scale-98 cursor-pointer flex items-center gap-2"
+                  onClick={handleSubmitDailyAssessment}
+                  disabled={
+                    isSubmittingAssessment ||
+                    (Object.keys(mcqAnswers).length === 0 && shortAnswerText.trim().length === 0)
+                  }
+                  className="px-6 py-3 bg-amber hover:bg-terracotta disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-xs transition-all cursor-pointer flex items-center gap-2"
                 >
-                  {isEvaluatingMission ? (
-                    <>
-                      <span className="animate-spin">🔄</span>
-                      <span>Evaluating Solution with AI...</span>
-                    </>
-                  ) : (
-                    <>
-                      <span>🚀</span>
-                      <span>Run Verification & Submit Mission (+50 XP)</span>
-                    </>
-                  )}
+                  {isSubmittingAssessment ? 'Grading on Server...' : 'Submit Daily Assessment →'}
                 </button>
               )}
             </div>

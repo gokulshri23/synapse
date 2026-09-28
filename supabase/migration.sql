@@ -206,3 +206,109 @@ ALTER TABLE public.network_gaps ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Allow all authenticated users" ON public.skill_declarations FOR ALL TO authenticated USING (true);
 CREATE POLICY "Allow all authenticated users" ON public.match_health FOR ALL TO authenticated USING (true);
 CREATE POLICY "Allow all authenticated users" ON public.network_gaps FOR ALL TO authenticated USING (true);
+
+-- =========================================================================
+-- Finals Prompt Part 2: New Tables & Strict Constraints
+-- =========================================================================
+
+-- Part 3: Roadmap Nodes with Single Unlocked Index
+CREATE TABLE IF NOT EXISTS public.roadmap_nodes (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id TEXT NOT NULL,
+  skill TEXT NOT NULL,
+  topic TEXT NOT NULL,
+  order_index INTEGER NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('locked', 'unlocked', 'completed')),
+  entry_applied_at TIMESTAMP WITH TIME ZONE,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+  UNIQUE(user_id, skill, topic)
+);
+
+-- STRICT RULE: Only one unlocked node per skill per user!
+CREATE UNIQUE INDEX IF NOT EXISTS idx_single_unlocked ON public.roadmap_nodes(user_id, skill) WHERE status = 'unlocked';
+
+-- Part 1: Collaborative Hook Challenges
+CREATE TABLE IF NOT EXISTS public.challenges (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  session_id TEXT NOT NULL,
+  topic TEXT NOT NULL,
+  question TEXT NOT NULL,
+  rubric JSONB NOT NULL,
+  starter_code TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- Part 1: Submissions (Unique per user per challenge)
+CREATE TABLE IF NOT EXISTS public.submissions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  challenge_id UUID REFERENCES public.challenges(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL,
+  answer TEXT NOT NULL,
+  score NUMERIC,
+  feedback JSONB,
+  status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'evaluated', 'not_evaluated')),
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+  UNIQUE(challenge_id, user_id)
+);
+
+-- Part 2: Daily Assessments (One per user per day)
+CREATE TABLE IF NOT EXISTS public.daily_assessments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id TEXT NOT NULL,
+  date TEXT NOT NULL,
+  topic TEXT NOT NULL,
+  questions JSONB NOT NULL,
+  status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'completed', 'failed')),
+  score NUMERIC DEFAULT 0,
+  completed_at TIMESTAMP WITH TIME ZONE,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+  UNIQUE(user_id, date)
+);
+
+-- Part 5: Video Library & Effectiveness
+CREATE TABLE IF NOT EXISTS public.video_library (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  topic TEXT NOT NULL,
+  youtube_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  status TEXT DEFAULT 'active' CHECK (status IN ('active', 'deprecated')),
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS public.video_effectiveness (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  video_id TEXT NOT NULL,
+  topic TEXT NOT NULL,
+  attempts INTEGER DEFAULT 0,
+  avg_score NUMERIC DEFAULT 0,
+  total_score NUMERIC DEFAULT 0,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- Part 7: Persistent Agent Activity Logs
+CREATE TABLE IF NOT EXISTS public.agent_activity_logs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  agent TEXT NOT NULL,
+  action TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  details JSONB DEFAULT '{}'::jsonb,
+  timestamp TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- Enable RLS for all new tables
+ALTER TABLE public.roadmap_nodes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.challenges ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.submissions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.daily_assessments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.video_library ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.video_effectiveness ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.agent_activity_logs ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Allow all authenticated users" ON public.roadmap_nodes FOR ALL TO authenticated USING (true);
+CREATE POLICY "Allow all authenticated users" ON public.challenges FOR ALL TO authenticated USING (true);
+CREATE POLICY "Allow all authenticated users" ON public.submissions FOR ALL TO authenticated USING (true);
+CREATE POLICY "Allow all authenticated users" ON public.daily_assessments FOR ALL TO authenticated USING (true);
+CREATE POLICY "Allow all authenticated users" ON public.video_library FOR ALL TO authenticated USING (true);
+CREATE POLICY "Allow all authenticated users" ON public.video_effectiveness FOR ALL TO authenticated USING (true);
+CREATE POLICY "Allow all authenticated users" ON public.agent_activity_logs FOR ALL TO authenticated USING (true);
+

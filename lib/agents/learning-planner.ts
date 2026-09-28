@@ -593,3 +593,88 @@ export function generateDailyMission(skills: Skill[]): DailyMission {
     date: new Date().toISOString().split('T')[0],
   };
 }
+
+/**
+ * PART 3: One rule, one function to map entry test score to a single unlocked roadmap node.
+ * Strict non-overlapping score bands:
+ *  0 <= score < 40  -> Level 1 (Node 0 unlocked)
+ * 40 <= score < 70  -> Level 2 (Node 0 completed, Node 1 unlocked) -> 66% is strictly Level 2!
+ * 70 <= score < 85  -> Level 3 (Nodes 0, 1 completed, Node 2 unlocked)
+ * 85 <= score <= 100 -> Level 4 (Nodes 0, 1, 2 completed, Node 3 unlocked)
+ * Enforces: EXACTLY ONE node has status = 'unlocked'.
+ */
+export function applyEntryResultToNodes(
+  skill: string,
+  score: number,
+  topicResults?: Record<string, number>
+): Array<{
+  topic: string;
+  order_index: number;
+  status: 'locked' | 'unlocked' | 'completed';
+  description: string;
+}> {
+  const normSkill = (skill || '').trim().toLowerCase();
+  let template = TEMPLATES[normSkill];
+  if (!template) {
+    if (normSkill.includes('py')) template = TEMPLATES.python;
+    else if (normSkill.includes('react') || normSkill.includes('web')) template = TEMPLATES.react;
+    else if (normSkill.includes('machine') || normSkill.includes('ml')) template = TEMPLATES['machine learning'];
+    else if (normSkill.includes('script') || normSkill.includes('js')) template = TEMPLATES.javascript;
+    else if (normSkill.includes('data') || normSkill.includes('algo')) template = TEMPLATES['data structures'];
+    else template = TEMPLATES.react;
+  }
+
+  const cleanScore = Math.max(0, Math.min(100, Math.round(score)));
+  let completedCount = 0;
+  let unlockedIndex = 0;
+
+  if (topicResults && Object.keys(topicResults).length > 0) {
+    // Check per-topic results
+    const completedSet = new Set<number>();
+    template.forEach((t, idx) => {
+      const s = topicResults[t.name || ''];
+      if (typeof s === 'number' && s >= 70) {
+        completedSet.add(idx);
+      }
+    });
+
+    let firstIncomplete = -1;
+    for (let i = 0; i < template.length; i++) {
+      if (!completedSet.has(i)) {
+        firstIncomplete = i;
+        break;
+      }
+    }
+    unlockedIndex = firstIncomplete !== -1 ? firstIncomplete : template.length - 1;
+    completedCount = unlockedIndex;
+  } else {
+    // Non-overlapping score bands
+    let level = 1;
+    if (cleanScore >= 85) level = 4;
+    else if (cleanScore >= 70) level = 3;
+    else if (cleanScore >= 40) level = 2; // 66% falls strictly here
+    else level = 1;
+
+    completedCount = level - 1;
+    unlockedIndex = level - 1;
+  }
+
+  return template.map((item, idx) => {
+    let status: 'locked' | 'unlocked' | 'completed' = 'locked';
+    if (idx < completedCount) {
+      status = 'completed';
+    } else if (idx === unlockedIndex) {
+      status = 'unlocked';
+    } else {
+      status = 'locked';
+    }
+
+    return {
+      topic: item.name || `Topic ${idx + 1}`,
+      order_index: idx,
+      status,
+      description: item.description || '',
+    };
+  });
+}
+

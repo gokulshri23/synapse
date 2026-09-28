@@ -225,3 +225,110 @@ export const PYTHON_TEACHING_SUBTOPICS = [
   { id: 'py-numpy', name: 'NumPy', weight: 0.15 },
   { id: 'py-pandas', name: 'Pandas', weight: 0.15 },
 ] as const;
+
+// =========================================================================
+//  Finals Prompt Part 2 — Core Types
+// =========================================================================
+
+export interface RoadmapNode {
+  id: string;
+  user_id: string;
+  skill: string;
+  topic: string;
+  order_index: number;
+  status: 'locked' | 'unlocked' | 'completed' | 'reinforce';
+  entry_applied_at?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface ChallengeRubric {
+  criteria: string[];
+  max_score: number;
+}
+
+export interface ChallengeRecord {
+  id: string;
+  session_id: string;
+  topic: string;
+  question: string;
+  rubric: ChallengeRubric;
+  starter_code?: string;
+  created_at: string;
+}
+
+export interface SubmissionFeedback {
+  correct_points: string[];
+  missing_points: string[];
+  one_improvement: string;
+  summary?: string;
+}
+
+export interface SubmissionRecord {
+  id: string;
+  challenge_id: string;
+  user_id: string;
+  answer: string;
+  score: number | null;
+  feedback?: SubmissionFeedback | null;
+  status: 'pending' | 'evaluated' | 'not_evaluated';
+  created_at: string;
+}
+
+export interface DailyAssessmentMCQ {
+  id: string;
+  question: string;
+  options: string[];
+  // Stored strictly on server; never sent to client prior to submit!
+  correct_index?: number;
+}
+
+export interface DailyAssessmentShortAnswer {
+  id: string;
+  question: string;
+  rubric: string;
+}
+
+export interface DailyAssessmentRecord {
+  id: string;
+  user_id: string;
+  date: string; // YYYY-MM-DD
+  topic: string;
+  questions: {
+    mcqs: DailyAssessmentMCQ[];
+    short_answer: DailyAssessmentShortAnswer;
+  };
+  status: 'pending' | 'completed' | 'failed';
+  score: number | null;
+  completed_at?: string | null;
+  xp_awarded?: number;
+}
+
+export interface VideoLibraryItem {
+  id: string;
+  topic: string;
+  youtube_id: string;
+  title: string;
+  status: 'active' | 'deprecated';
+  created_at: string;
+}
+
+export interface VideoEffectivenessRecord {
+  id: string;
+  video_id: string;
+  topic: string;
+  attempts: number;
+  avg_score: number;
+  total_score: number;
+  updated_at: string;
+}
+
+export interface AgentActivityEntry {
+  id: string;
+  timestamp: string;
+  agent: 'Planner' | 'Matcher' | 'Adaptation' | 'StudyAssistant' | 'Assessment' | 'Evaluation';
+  action: string;
+  reason: string;
+  details?: Record<string, any>;
+}
+

@@ -3,6 +3,15 @@ import path from 'path';
 import os from 'os';
 import crypto from 'crypto';
 import dns from 'dns';
+import {
+  RoadmapNode,
+  ChallengeRecord,
+  SubmissionRecord,
+  DailyAssessmentRecord,
+  VideoLibraryItem,
+  VideoEffectivenessRecord,
+  AgentActivityEntry,
+} from '@/lib/types';
 
 // Ensure IPv4 first on Node to prevent connection latency
 try {
@@ -180,6 +189,14 @@ interface CloudStoreData {
   skill_declarations: Record<string, CloudSkillDeclaration[]>;
   match_health: CloudMatchHealth[];
   network_gaps: CloudNetworkGap[];
+  // Finals Part 2 additions
+  roadmap_nodes: Record<string, RoadmapNode[]>;
+  challenge_records: Record<string, ChallengeRecord>;
+  submissions: Record<string, SubmissionRecord[]>;
+  daily_assessments: Record<string, DailyAssessmentRecord>;
+  video_library: VideoLibraryItem[];
+  video_effectiveness: Record<string, VideoEffectivenessRecord>;
+  agent_activity_logs: AgentActivityEntry[];
 }
 
 // Global in-memory cache to maintain state across hot lambda invocations
@@ -214,6 +231,13 @@ function loadStore(): CloudStoreData {
         skill_declarations: parsed.skill_declarations || {},
         match_health: Array.isArray(parsed.match_health) ? parsed.match_health : [],
         network_gaps: Array.isArray(parsed.network_gaps) ? parsed.network_gaps : [],
+        roadmap_nodes: parsed.roadmap_nodes || {},
+        challenge_records: parsed.challenge_records || {},
+        submissions: parsed.submissions || {},
+        daily_assessments: parsed.daily_assessments || {},
+        video_library: Array.isArray(parsed.video_library) ? parsed.video_library : [],
+        video_effectiveness: parsed.video_effectiveness || {},
+        agent_activity_logs: Array.isArray(parsed.agent_activity_logs) ? parsed.agent_activity_logs : [],
       };
       return global.__synapse_cloud_cache;
     }
@@ -243,6 +267,13 @@ function loadStore(): CloudStoreData {
     skill_declarations: {},
     match_health: [],
     network_gaps: [],
+    roadmap_nodes: {},
+    challenge_records: {},
+    submissions: {},
+    daily_assessments: {},
+    video_library: [],
+    video_effectiveness: {},
+    agent_activity_logs: [],
   };
 
   global.__synapse_cloud_cache = initial;
@@ -981,4 +1012,601 @@ export function getSessionLostFlags(sessionId: string): { senderId: string; coun
     count,
   }));
 }
+
+// =========================================================================
+//  FINALS PART 2 — Step 2: Part 3 Roadmap Nodes (Single Unlocked Guarantee)
+// =========================================================================
+
+export const DEFAULT_SKILL_TOPICS: Record<string, string[]> = {
+  react: [
+    'Modern JS (ES6+) & DOM Prerequisites',
+    'JSX & Rendering Architecture',
+    'Component Architecture & Props',
+    'State Management & Lifecycle',
+    'Hooks Deep Dive & Custom Hooks',
+    'Global State & Context API',
+    'Routing & Navigation Patterns',
+    'Performance & Optimization',
+    'Testing & Component Quality',
+    'Full-Stack Architecture'
+  ],
+  python: [
+    'Variables, Data Types & Control Flow',
+    'Functions, Scopes & Modular Design',
+    'Data Structures: Lists, Dicts, Sets & Tuples',
+    'Object-Oriented Programming (OOP)',
+    'File Handling & Exception Safety',
+    'NumPy & Numerical Computing',
+    'Pandas & Data Processing',
+    'APIs & Async Python Architecture',
+    'Web Frameworks: FastAPI & Flask',
+    'Concurrency & Multiprocessing'
+  ],
+  javascript: [
+    'Variables, Scopes & Lexical Environment',
+    'Prototypes & Object-Oriented JS',
+    'Asynchronous JS: Event Loop & Promises',
+    'DOM Manipulation & Browser Events',
+    'ES6+ Modules & Modern Tooling',
+    'Memory Management & Closures',
+    'Design Patterns & Clean Code',
+    'Web APIs & Fetch/Networking',
+    'Performance Optimization & Profiling',
+    'Testing with Jest & Vitest'
+  ],
+  'machine learning': [
+    'Linear Algebra & Calculus Foundations',
+    'Probability, Statistics & Hypothesis Testing',
+    'Data Preprocessing & Feature Engineering',
+    'Supervised Learning: Regression & Classification',
+    'Unsupervised Learning: Clustering & PCA',
+    'Model Evaluation, Cross-Validation & Overfitting',
+    'Ensemble Methods: Random Forests & XGBoost',
+    'Deep Learning Foundations & Neural Networks',
+    'Computer Vision (CNNs) & NLP (Transformers)',
+    'MLOps, Model Deployment & Monitoring'
+  ],
+  'data structures': [
+    'Complexity Analysis (Big-O Notation)',
+    'Arrays, Strings & Two-Pointer Patterns',
+    'Linked Lists & Fast/Slow Pointers',
+    'Stacks, Queues & Monotonic Structures',
+    'Hash Tables & Collision Resolution',
+    'Recursion & Backtracking Algorithms',
+    'Trees & Binary Search Trees (BST)',
+    'Heaps & Priority Queues',
+    'Graphs & Network Traversal',
+    'Dynamic Programming & Greedy Strategies'
+  ]
+};
+
+export function getDefaultTopicsForSkill(skill: string): string[] {
+  const norm = (skill || '').trim().toLowerCase();
+  for (const key of Object.keys(DEFAULT_SKILL_TOPICS)) {
+    if (norm.includes(key) || key.includes(norm)) {
+      return DEFAULT_SKILL_TOPICS[key];
+    }
+  }
+  return DEFAULT_SKILL_TOPICS.react;
+}
+
+export function applyEntryResult(
+  userId: string,
+  skill: string,
+  score: number,
+  topicResults?: Record<string, number>
+): RoadmapNode[] {
+  const store = loadStore();
+  const normUser = userId.trim().toLowerCase();
+  const normSkill = skill.trim().toLowerCase();
+  const mapKey = `${normUser}___${normSkill}`;
+
+  // Idempotency check: if entry already applied and nodes exist, return existing
+  const existing = store.roadmap_nodes[mapKey];
+  if (existing && existing.length > 0 && existing[0].entry_applied_at) {
+    return existing;
+  }
+
+  const topics = getDefaultTopicsForSkill(normSkill);
+  let completedIndices = new Set<number>();
+  let unlockedIndex = 0;
+
+  if (topicResults && Object.keys(topicResults).length > 0) {
+    // 1. Tag each entry topic with its score (>= 70% is completed)
+    topics.forEach((t, i) => {
+      const topicScore = topicResults[t];
+      if (typeof topicScore === 'number' && topicScore >= 70) {
+        completedIndices.add(i);
+      }
+    });
+
+    // 2. First topic in order that is NOT completed becomes the single unlocked node
+    let firstIncomplete = -1;
+    for (let i = 0; i < topics.length; i++) {
+      if (!completedIndices.has(i)) {
+        firstIncomplete = i;
+        break;
+      }
+    }
+    unlockedIndex = firstIncomplete !== -1 ? firstIncomplete : topics.length - 1;
+  } else {
+    // 3. Fall back to non-overlapping score bands:
+    // 0 <= score < 40  -> Level 1 (Node 0 unlocked)
+    // 40 <= score < 70 -> Level 2 (Node 0 completed, Node 1 unlocked) -> 66% strictly here!
+    // 70 <= score < 85 -> Level 3 (Node 0, 1 completed, Node 2 unlocked)
+    // 85 <= score <= 100 -> Level 4 (Node 0, 1, 2 completed, Node 3 unlocked)
+    const cleanScore = Math.max(0, Math.min(100, Math.round(score)));
+    let level = 1;
+    if (cleanScore >= 85) level = 4;
+    else if (cleanScore >= 70) level = 3;
+    else if (cleanScore >= 40) level = 2;
+    else level = 1;
+
+    for (let i = 0; i < level - 1; i++) {
+      completedIndices.add(i);
+    }
+    unlockedIndex = level - 1;
+  }
+
+  const now = new Date().toISOString();
+  const nodes: RoadmapNode[] = topics.map((topic, i) => {
+    let status: RoadmapNode['status'] = 'locked';
+    if (completedIndices.has(i)) {
+      status = 'completed';
+    } else if (i === unlockedIndex) {
+      status = 'unlocked';
+    } else {
+      status = 'locked';
+    }
+
+    return {
+      id: `rn_${normUser}_${normSkill}_${i}`,
+      user_id: normUser,
+      skill: normSkill,
+      topic,
+      order_index: i,
+      status,
+      entry_applied_at: now,
+      updated_at: now,
+    };
+  });
+
+  // Strict check: exactly ONE node must be 'unlocked'
+  const unlockedCount = nodes.filter(n => n.status === 'unlocked').length;
+  if (unlockedCount !== 1) {
+    console.warn(`[roadmap] Anomaly detected: ${unlockedCount} unlocked nodes. Correcting to single unlocked node.`);
+    let seenUnlocked = false;
+    nodes.forEach(n => {
+      if (n.status === 'unlocked') {
+        if (!seenUnlocked) seenUnlocked = true;
+        else n.status = 'locked';
+      }
+    });
+  }
+
+  store.roadmap_nodes[mapKey] = nodes;
+  saveStore(store);
+  return nodes;
+}
+
+export function getRoadmapNodes(userId: string, skill: string): RoadmapNode[] {
+  const store = loadStore();
+  const normUser = userId.trim().toLowerCase();
+  const normSkill = skill.trim().toLowerCase();
+  const mapKey = `${normUser}___${normSkill}`;
+  return store.roadmap_nodes[mapKey] || [];
+}
+
+export function passRoadmapTopic(
+  userId: string,
+  skill: string,
+  topic: string,
+  score: number
+): { success: boolean; nodes: RoadmapNode[]; nextUnlockedTopic?: string } {
+  const store = loadStore();
+  const normUser = userId.trim().toLowerCase();
+  const normSkill = skill.trim().toLowerCase();
+  const mapKey = `${normUser}___${normSkill}`;
+
+  const nodes = store.roadmap_nodes[mapKey] || [];
+  if (nodes.length === 0) {
+    return { success: false, nodes: [] };
+  }
+
+  // Topic quiz must be passed with >= 70%
+  if (score < 70) {
+    return { success: false, nodes };
+  }
+
+  const currentIndex = nodes.findIndex(n => n.topic.toLowerCase() === topic.toLowerCase());
+  if (currentIndex === -1) {
+    return { success: false, nodes };
+  }
+
+  const now = new Date().toISOString();
+  nodes[currentIndex].status = 'completed';
+  nodes[currentIndex].updated_at = now;
+
+  let nextUnlockedTopic: string | undefined;
+  if (currentIndex + 1 < nodes.length) {
+    nodes[currentIndex + 1].status = 'unlocked';
+    nodes[currentIndex + 1].updated_at = now;
+    nextUnlockedTopic = nodes[currentIndex + 1].topic;
+  }
+
+  // Enforce single unlocked node rule
+  let seenUnlocked = false;
+  nodes.forEach((n) => {
+    if (n.status === 'unlocked') {
+      if (!seenUnlocked) seenUnlocked = true;
+      else n.status = 'locked';
+    }
+  });
+
+  store.roadmap_nodes[mapKey] = nodes;
+  saveStore(store);
+  return { success: true, nodes, nextUnlockedTopic };
+}
+
+export function addReinforceTopic(userId: string, skill: string, topicName: string): RoadmapNode[] {
+  const store = loadStore();
+  const mapKey = `${userId.trim().toLowerCase()}___${skill.trim().toLowerCase()}`;
+  const nodes = store.roadmap_nodes[mapKey] || [];
+
+  const existing = nodes.find((n) => n.topic.toLowerCase() === topicName.toLowerCase());
+  if (existing) {
+    if (existing.status !== 'unlocked') {
+      existing.status = 'reinforce';
+      existing.updated_at = new Date().toISOString();
+    }
+  } else {
+    const maxIndex = nodes.reduce((max, n) => Math.max(max, n.order_index), 0);
+    const reinforceNode: RoadmapNode = {
+      id: `rn_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      user_id: userId.trim().toLowerCase(),
+      skill,
+      topic: topicName,
+      status: 'reinforce',
+      order_index: maxIndex + 1,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    nodes.push(reinforceNode);
+  }
+
+  store.roadmap_nodes[mapKey] = nodes;
+  saveStore(store);
+  return nodes;
+}
+
+// =========================================================================
+//  FINALS PART 2 — Step 4: Part 1 Collaborative Hook Challenges
+// =========================================================================
+
+export function getOrCreateChallengeRecord(
+  sessionId: string,
+  topic: string,
+  customData?: Partial<ChallengeRecord>
+): ChallengeRecord {
+  const store = loadStore();
+  const existing = store.challenge_records[sessionId];
+  if (existing) {
+    return existing;
+  }
+
+  const newChallenge: ChallengeRecord = {
+    id: `chal_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+    session_id: sessionId,
+    topic: topic || 'React',
+    question:
+      customData?.question ||
+      `Implement a resilient asynchronous state synchronizer in ${topic}. Handle race conditions, debounced updates, and proper cleanup.`,
+    rubric: customData?.rubric || {
+      criteria: [
+        'Correct logic and state updates',
+        'Proper error and loading boundary management',
+        'Clean edge case handling and cleanup',
+      ],
+      max_score: 100,
+    },
+    starter_code:
+      customData?.starter_code ||
+      `// Collaborative Challenge: ${topic}\nfunction useAsyncSync(endpoint) {\n  // Implement your collaborative solution\n  return { status: 'idle', data: null };\n}`,
+    created_at: new Date().toISOString(),
+  };
+
+  store.challenge_records[sessionId] = newChallenge;
+  saveStore(store);
+  return newChallenge;
+}
+
+export function saveSubmissionRecord(
+  data: Omit<SubmissionRecord, 'id' | 'created_at'>
+): SubmissionRecord {
+  const store = loadStore();
+  if (!store.submissions[data.challenge_id]) {
+    store.submissions[data.challenge_id] = [];
+  }
+
+  const userSubmissions = store.submissions[data.challenge_id];
+  const existingIdx = userSubmissions.findIndex(
+    (s) => s.user_id.toLowerCase() === data.user_id.toLowerCase()
+  );
+
+  const record: SubmissionRecord = {
+    id: `sub_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+    challenge_id: data.challenge_id,
+    user_id: data.user_id.trim().toLowerCase(),
+    answer: data.answer,
+    score: data.score,
+    feedback: data.feedback || null,
+    status: data.status,
+    created_at: new Date().toISOString(),
+  };
+
+  if (existingIdx !== -1) {
+    userSubmissions[existingIdx] = record;
+  } else {
+    userSubmissions.push(record);
+  }
+
+  saveStore(store);
+  return record;
+}
+
+export function getChallengeSubmissions(challengeId: string): SubmissionRecord[] {
+  const store = loadStore();
+  return store.submissions[challengeId] || [];
+}
+
+// =========================================================================
+//  FINALS PART 2 — Step 3: Part 2 Daily Assessment
+// =========================================================================
+
+export function getOrCreateDailyAssessmentRecord(
+  userId: string,
+  topic: string,
+  date: string,
+  generator?: () => DailyAssessmentRecord['questions']
+): DailyAssessmentRecord {
+  const store = loadStore();
+  const normUser = userId.trim().toLowerCase();
+  const assessKey = `${normUser}___${date}`;
+
+  const existing = store.daily_assessments[assessKey];
+  if (existing) {
+    return existing;
+  }
+
+  const questions = generator
+    ? generator()
+    : {
+        mcqs: [
+          {
+            id: 'q1',
+            question: `In ${topic}, what is the primary purpose of state immutability?`,
+            options: [
+              'To prevent mutation of values so change detection is predictable',
+              'To speed up arithmetic operations',
+              'To bypass garbage collection',
+              'To enforce strict type casting',
+            ],
+            correct_index: 0,
+          },
+          {
+            id: 'q2',
+            question: `Which data structure or pattern is best suited for caching previous calculations in ${topic}?`,
+            options: [
+              'FIFO Queue',
+              'Memoization Map / Hash Table',
+              'Linked List',
+              'Binary Heap',
+            ],
+            correct_index: 1,
+          },
+          {
+            id: 'q3',
+            question: `What is the asymptotic time complexity of looking up a key in a standard hash map in ${topic}?`,
+            options: ['O(N)', 'O(log N)', 'O(1) average', 'O(N^2)'],
+            correct_index: 2,
+          },
+          {
+            id: 'q4',
+            question: `When handling asynchronous operations in ${topic}, how should unhandled promise rejections be addressed?`,
+            options: [
+              'Ignore them because Node handles them silently',
+              'Attach a .catch() handler or use try/catch blocks',
+              'Wrap in a while loop until resolved',
+              'Convert them to synchronous calls',
+            ],
+            correct_index: 1,
+          },
+        ],
+        short_answer: {
+          id: 'q5',
+          question: `Explain how you would handle race conditions when two async requests for ${topic} complete in arbitrary order.`,
+          rubric:
+            'Must mention request cancellation (AbortController), tracking sequence counters/timestamps, or ignoring stale responses.',
+        },
+      };
+
+  const newRecord: DailyAssessmentRecord = {
+    id: `da_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+    user_id: normUser,
+    date,
+    topic,
+    questions,
+    status: 'pending',
+    score: null,
+    completed_at: null,
+    xp_awarded: 0,
+  };
+
+  store.daily_assessments[assessKey] = newRecord;
+  saveStore(store);
+  return newRecord;
+}
+
+export function submitDailyAssessmentRecord(
+  userId: string,
+  date: string,
+  score: number,
+  status: 'completed' | 'failed',
+  xp: number
+): DailyAssessmentRecord | null {
+  const store = loadStore();
+  const normUser = userId.trim().toLowerCase();
+  const assessKey = `${normUser}___${date}`;
+
+  const record = store.daily_assessments[assessKey];
+  if (!record || record.status === 'completed') {
+    return record || null; // Idempotent: don't double award
+  }
+
+  record.score = score;
+  record.status = status;
+  record.completed_at = new Date().toISOString();
+  record.xp_awarded = xp;
+
+  if (xp > 0) {
+    const profile = store.profiles[normUser];
+    if (profile) {
+      profile.xp = (profile.xp || 350) + xp;
+    }
+  }
+
+  saveStore(store);
+  return record;
+}
+
+// =========================================================================
+//  FINALS PART 2 — Step 6: Part 5 Video Library & Effectiveness
+// =========================================================================
+
+export const CURATED_TOPIC_VIDEOS: Record<string, { youtubeId: string; title: string }> = {
+  react: {
+    youtubeId: 'bMknfKXIFA8',
+    title: 'React Course - Beginner to Advanced Tutorial',
+  },
+  python: {
+    youtubeId: '_uQrJ0TkZlc',
+    title: 'Python for Beginners - Full Course',
+  },
+  javascript: {
+    youtubeId: 'W6NZfCO5SIk',
+    title: 'JavaScript Tutorial for Beginners: Learn JavaScript in 1 Hour',
+  },
+  'machine learning': {
+    youtubeId: 'i_LwzRVP7bg',
+    title: 'Machine Learning for Everybody – Full Course',
+  },
+  'data structures': {
+    youtubeId: 'RBSGKlAvoiM',
+    title: 'Data Structures and Algorithms for Beginners',
+  },
+};
+
+export function getVideoForTopic(topic: string): VideoLibraryItem {
+  const store = loadStore();
+  const norm = topic.trim().toLowerCase();
+
+  // Check store
+  const existing = store.video_library.find(
+    (v) => v.topic.toLowerCase().includes(norm) && v.status === 'active'
+  );
+  if (existing) return existing;
+
+  // Use curated default
+  let picked = CURATED_TOPIC_VIDEOS.react;
+  for (const k of Object.keys(CURATED_TOPIC_VIDEOS)) {
+    if (norm.includes(k) || k.includes(norm)) {
+      picked = CURATED_TOPIC_VIDEOS[k];
+      break;
+    }
+  }
+
+  const item: VideoLibraryItem = {
+    id: `vid_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+    topic,
+    youtube_id: picked.youtubeId,
+    title: picked.title,
+    status: 'active',
+    created_at: new Date().toISOString(),
+  };
+
+  store.video_library.push(item);
+  saveStore(store);
+  return item;
+}
+
+export function recordVideoAttempt(
+  videoId: string,
+  topic: string,
+  score: number
+): VideoEffectivenessRecord {
+  const store = loadStore();
+  let rec = store.video_effectiveness[videoId];
+  if (!rec) {
+    rec = {
+      id: `ve_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      video_id: videoId,
+      topic,
+      attempts: 0,
+      avg_score: 0,
+      total_score: 0,
+      updated_at: new Date().toISOString(),
+    };
+  }
+
+  rec.attempts += 1;
+  rec.total_score += score;
+  rec.avg_score = Math.round((rec.total_score / rec.attempts) * 10) / 10;
+  rec.updated_at = new Date().toISOString();
+
+  // Hard rule: After at least 5 attempts, an average under 50% marks video deprecated
+  if (rec.attempts >= 5 && rec.avg_score < 50) {
+    const vid = store.video_library.find((v) => v.id === videoId || v.youtube_id === videoId);
+    if (vid) {
+      vid.status = 'deprecated';
+    }
+  }
+
+  store.video_effectiveness[videoId] = rec;
+  saveStore(store);
+  return rec;
+}
+
+// =========================================================================
+//  FINALS PART 2 — Step 8: Part 7 Agent Activity Feed
+// =========================================================================
+
+export function logAgentActivity(
+  agent: AgentActivityEntry['agent'],
+  action: string,
+  reason: string,
+  details?: Record<string, any>
+): AgentActivityEntry {
+  const store = loadStore();
+  const entry: AgentActivityEntry = {
+    id: `act_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+    timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+    agent,
+    action,
+    reason,
+    details: details || {},
+  };
+
+  store.agent_activity_logs.unshift(entry);
+  if (store.agent_activity_logs.length > 200) {
+    store.agent_activity_logs = store.agent_activity_logs.slice(0, 200);
+  }
+  saveStore(store);
+  return entry;
+}
+
+export function getAgentActivityLogs(limit = 50): AgentActivityEntry[] {
+  const store = loadStore();
+  return (store.agent_activity_logs || []).slice(0, limit);
+}
+
 

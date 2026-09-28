@@ -8,6 +8,7 @@ import {
   logNetworkGap
 } from '@/lib/cloudStore';
 import { GoogleGenAI } from '@google/genai';
+import { determineAutonomousActionWithAI } from '@/lib/agents/adaptation-engine';
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
 const model = 'gemini-2.0-flash';
@@ -75,19 +76,15 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      let adaptationAction = null;
-      let reason = null;
-
-      if (consecutiveDeclines >= 4) {
-        adaptationAction = 'auto_rematch';
-        reason = 'Finding a teacher with a different teaching style';
-      } else if (consecutiveDeclines === 3) {
-        adaptationAction = 'alternate_explanation';
-        reason = 'Trying a different explanation approach';
-      } else if (consecutiveDeclines === 2) {
-        adaptationAction = 'prerequisite_check';
-        reason = 'Checking if prerequisite knowledge needs strengthening';
-      }
+      const avgDelta = trend.length > 0 ? trend.reduce((sum, s) => sum + s.delta, 0) / trend.length : 0;
+      const { action: adaptationAction, reason } = await determineAutonomousActionWithAI(
+        {
+          trend: avgDelta < -5 || consecutiveDeclines >= 2 ? 'declining' : avgDelta > 5 ? 'improving' : 'flat',
+          avgDelta,
+          consecutiveDeclines,
+        },
+        { skill, learnerName: learnerId, teacherName: teacherId }
+      );
 
       return NextResponse.json({
         health: record,
