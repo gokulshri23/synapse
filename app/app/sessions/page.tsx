@@ -1603,6 +1603,7 @@ function useAsync(asyncFn) {
     const peerId = (activePeer.id || activePeer.name || 'peer').trim().toLowerCase();
     const connId = activePeer.connectionId || `pair_${[myId, peerId].sort().join('_')}`;
     const initialRoomName = `pair-${connId}`;
+    setCurrentCallId(null);
     setActiveCallSessionId(initialRoomName);
     setIsCallInitiator(true);
     setCallMode(mode);
