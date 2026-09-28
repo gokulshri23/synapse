@@ -743,21 +743,18 @@ export function getSignalingMessages(
 
   const sessKey = sessionId || 'global_collab';
   const list = store.signaling[sessKey] || [];
-  const normUser = forUserId.toLowerCase().trim();
+  const normUser = (forUserId || '').toLowerCase().trim();
+  const userPrefix = normUser.split('@')[0];
 
-  // Return messages destined for this user or broadcast to this session, not sent by themselves
+  // Return all signaling packets in this session not sent by this user
   return list.filter((s) => {
     if (s.createdAt <= sinceTime) return false;
     const sSender = (s.senderId || '').toLowerCase().trim();
-    const sRecipient = (s.recipientId || '').toLowerCase().trim();
-    if (sSender === normUser) return false;
-    // If recipient is specified, allow if it matches user, user prefix, or is not specifically targeted to someone else
-    if (sRecipient && sRecipient !== normUser) {
-      const matchPrefix = normUser.split('@')[0];
-      const recPrefix = sRecipient.split('@')[0];
-      if (matchPrefix !== recPrefix && !normUser.includes(sRecipient) && !sRecipient.includes(normUser)) {
-        return false;
-      }
+    const senderPrefix = sSender.split('@')[0];
+
+    // Don't return messages sent by this same user
+    if (sSender && normUser && (sSender === normUser || (userPrefix && senderPrefix === userPrefix))) {
+      return false;
     }
     return true;
   });

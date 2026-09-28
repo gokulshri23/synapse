@@ -10,7 +10,7 @@ interface NativeCallViewProps {
   peerEmail?: string;
   sessionId: string;
   isInitiator?: boolean;
-  onEndCall: () => void;
+  onEndCall: (durationSeconds?: number) => void;
 }
 
 export default function NativeCallView({
@@ -40,6 +40,7 @@ export default function NativeCallView({
 
   const localStreamRef = useRef<MediaStream | null>(null);
   const screenStreamRef = useRef<MediaStream | null>(null);
+  const remoteStreamRef = useRef<MediaStream>(new MediaStream());
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const animFrameRef = useRef<number | null>(null);
@@ -70,6 +71,16 @@ export default function NativeCallView({
       remoteVideoRef.current.play().catch(() => {});
     }
   }, []);
+
+  // Ensure local video element binds to stream when camera is active
+  useEffect(() => {
+    if (localVideoRef.current && localStreamRef.current && mode === 'video' && !videoOff) {
+      if (localVideoRef.current.srcObject !== localStreamRef.current) {
+        localVideoRef.current.srcObject = localStreamRef.current;
+        localVideoRef.current.play().catch(() => {});
+      }
+    }
+  }, [videoOff, mode, peerConnected]);
 
   // Setup local media & WebRTC connection
   useEffect(() => {
@@ -163,9 +174,15 @@ export default function NativeCallView({
           stream.getTracks().forEach((track) => pc.addTrack(track, stream!));
         }
 
-        // Handle remote incoming tracks (Audio and Video)
+        // Handle remote incoming tracks (Audio and Video combined into persistent stream)
         pc.ontrack = (event) => {
-          const remoteStream = event.streams[0] || new MediaStream([event.track]);
+          const track = event.track;
+          const remoteStream = remoteStreamRef.current;
+
+          // Merge incoming track so audio and video coexist without overwriting each other
+          if (!remoteStream.getTracks().some((t) => t.id === track.id)) {
+            remoteStream.addTrack(track);
+          }
 
           if (remoteVideoRef.current) {
             remoteVideoRef.current.srcObject = remoteStream;
@@ -181,17 +198,17 @@ export default function NativeCallView({
 
           setPeerConnected(true);
 
-          const checkVideoTracks = () => {
+          const updateVideoStatus = () => {
             const vTracks = remoteStream.getVideoTracks();
             const isLive = vTracks.length > 0 && vTracks.some((t) => t.enabled && t.readyState === 'live');
             setHasRemoteVideo(isLive);
           };
 
-          checkVideoTracks();
-          remoteStream.getVideoTracks().forEach((vt) => {
-            vt.onmute = checkVideoTracks;
-            vt.onunmute = checkVideoTracks;
-            vt.onended = checkVideoTracks;
+          updateVideoStatus();
+          remoteStream.getTracks().forEach((t) => {
+            t.onmute = updateVideoStatus;
+            t.onunmute = updateVideoStatus;
+            t.onended = updateVideoStatus;
           });
         };
 
@@ -484,8 +501,13 @@ export default function NativeCallView({
       onClick={triggerAudioPlayback}
       className="w-full h-full flex flex-col bg-[#1C1917] text-white rounded-2xl overflow-hidden relative select-none"
     >
-      {/* Hidden dedicated audio element for reliable cross-browser voice playback */}
-      <audio ref={remoteAudioRef} autoPlay playsInline className="sr-only" />
+      {/* Reliable cross-browser unthrottled audio playback */}
+      <audio
+        ref={remoteAudioRef}
+        autoPlay
+        playsInline
+        style={{ position: 'fixed', top: '-1000px', left: '-1000px', opacity: 0, pointerEvents: 'none' }}
+      />
 
       {/* Top HUD */}
       <div className="absolute top-3 left-3 right-3 z-20 flex items-center justify-between pointer-events-none">
@@ -663,7 +685,7 @@ export default function NativeCallView({
 
         {/* End Call Button */}
         <button
-          onClick={onEndCall}
+          onClick={() => onEndCall(callDuration)}
           className="px-5 py-2 rounded-full bg-bad hover:bg-red-700 text-white font-bold text-xs shadow-lg transition-colors cursor-pointer flex items-center gap-1.5"
         >
           <span>✕</span> End Call

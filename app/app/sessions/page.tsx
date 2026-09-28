@@ -227,7 +227,7 @@ function useAsync(asyncFn) {
   const [callConnecting, setCallConnecting] = useState(false);
   const [callTimeout, setCallTimeout] = useState(false);
   const [showPostCallQuiz, setShowPostCallQuiz] = useState(false);
-  const [postCallAnswer, setPostCallAnswer] = useState<number | null>(null);
+  const [postCallAnswers, setPostCallAnswers] = useState<number[]>([-1, -1, -1]);
   const [postCallSubmitted, setPostCallSubmitted] = useState(false);
 
   // Live Call Signaling & Incoming Ringing
@@ -1329,10 +1329,22 @@ function useAsync(asyncFn) {
     }
   };
 
-  const handleEndCall = () => {
+  const handleEndCall = (durationSec = 0) => {
     setIsCallModalOpen(false);
     setCallUrl(null);
-    setShowPostCallQuiz(true);
+
+    // Only show post-call quiz if call was attended for at least 1 minute (60s)
+    if (typeof durationSec === 'number' && durationSec >= 60) {
+      setShowPostCallQuiz(true);
+      setPostCallAnswers([-1, -1, -1]);
+      setPostCallSubmitted(false);
+      const mins = Math.floor(durationSec / 60);
+      const secs = durationSec % 60;
+      showToast(`Call ended (${mins}m ${secs}s). Please complete the 3-question peer check.`);
+    } else {
+      setShowPostCallQuiz(false);
+      showToast(`Call ended (${durationSec}s). Calls under 1 minute do not require a post-call check.`);
+    }
 
     // Broadcast call end to network
     fetch('/api/peer-network', {
@@ -1400,10 +1412,10 @@ function useAsync(asyncFn) {
 
   const handleSubmitPostCallQuiz = () => {
     setPostCallSubmitted(true);
-    const nextXp = userXp + 15;
+    const nextXp = userXp + 25;
     setUserXp(nextXp);
     localStorage.setItem('synapse_user_xp', nextXp.toString());
-    showToast('🎉 Post-call understanding verified! +15 XP.');
+    showToast('🎉 Post-call understanding verified across all 3 criteria! +25 XP.');
     setTimeout(() => setShowPostCallQuiz(false), 2000);
   };
 
@@ -2544,53 +2556,112 @@ function useAsync(asyncFn) {
         </div>
       )}
 
-      {/* ─── Part 6: Post-Call Understanding Check ───────────────── */}
+      {/* ─── Part 6: Post-Call Understanding Check (3-Question Rigorous Check) ─── */}
       {showPostCallQuiz && (
-        <div className="fixed inset-0 z-[130] bg-ink/70 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
-          <div className="bg-card border border-border rounded-[24px] max-w-md w-full p-6 shadow-2xl space-y-4">
-            <h3 className="font-serif font-bold text-ink text-base">Quick Post-Call Check</h3>
-            <p className="text-xs text-muted">1-question check to verify key takeaway from your discussion with {activePeer.name}:</p>
-            <div className="p-3.5 bg-card-alt rounded-xl border border-border">
-              <p className="text-xs font-semibold text-ink mb-2">
-                What was the primary design principle discussed for handling state synchronicity in {studentTrack}?
-              </p>
-              <div className="space-y-2">
-                {[
-                  'Avoid stale closures by tracking sequence counters or cleanup flags',
-                  'Mutate state variables directly inside async promises',
-                  'Disable error boundary handling to speed up execution'
-                ].map((opt, i) => (
-                  <button
-                    key={i}
-                    onClick={() => setPostCallAnswer(i)}
-                    className={'w-full text-left text-xs p-2.5 rounded-lg border transition-all cursor-pointer ' +
-                      (postCallAnswer === i ? 'bg-amber/15 border-amber text-ink font-semibold' : 'bg-card border-border text-ink hover:border-amber/40')}
-                  >
-                    {opt}
-                  </button>
-                ))}
+        <div className="fixed inset-0 z-[130] bg-ink/70 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in overflow-y-auto">
+          <div className="bg-card border border-border rounded-[24px] max-w-lg w-full p-6 shadow-2xl space-y-4 my-8">
+            <div className="flex items-center justify-between border-b border-border pb-3">
+              <div>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-amber">
+                  Verified Call Comprehension Check
+                </span>
+                <h3 className="font-serif font-bold text-ink text-base">Post-Call Discussion Assessment</h3>
               </div>
+              <span className="text-xs font-mono font-bold text-amber bg-amber/10 px-2.5 py-1 rounded-full border border-amber/20">
+                +25 XP
+              </span>
             </div>
-            <button
-              onClick={handleSubmitPostCallQuiz}
-              disabled={postCallAnswer === null || postCallSubmitted}
-              className="w-full py-2.5 bg-amber hover:bg-terracotta text-white font-bold text-xs rounded-xl shadow-xs transition-all disabled:opacity-50 cursor-pointer"
-            >
-              {postCallSubmitted ? '✓ Verified (+15 XP)' : 'Submit Check (+15 XP)'}
-            </button>
+            <p className="text-xs text-muted">
+              Verify the key engineering concepts and architectural decisions established during your call with {activePeer.name}:
+            </p>
+
+            <div className="space-y-3.5 max-h-[60vh] overflow-y-auto pr-1">
+              {[
+                {
+                  q: `1. What was the primary design principle established for state synchronicity in ${studentTrack}?`,
+                  opts: [
+                    'Avoid stale closures by tracking sequence counters or cleanup flags',
+                    'Mutate state variables directly inside asynchronous promises',
+                    'Disable error boundary handling to speed up rendering speed',
+                  ],
+                },
+                {
+                  q: '2. How did you both agree to manage asynchronous failures and network exceptions?',
+                  opts: [
+                    'Wrap operations in resilient error boundaries with fallback states',
+                    'Suppress all errors silently without notifying UI consumers',
+                    'Force a full browser window reload on every network timeout',
+                  ],
+                },
+                {
+                  q: '3. What collaborative consensus was reached on code modularity and cleanliness?',
+                  opts: [
+                    'Keep modules cohesive, loosely coupled, and thoroughly testable',
+                    'Store all domain state directly on the global window object',
+                    'Merge presentation views directly into raw database calls',
+                  ],
+                },
+              ].map((item, qi) => (
+                <div key={qi} className="p-3 bg-card-alt rounded-xl border border-border space-y-2">
+                  <p className="text-xs font-semibold text-ink leading-snug">{item.q}</p>
+                  <div className="space-y-1.5">
+                    {item.opts.map((opt, oi) => (
+                      <button
+                        key={oi}
+                        type="button"
+                        onClick={() => {
+                          const next = [...postCallAnswers];
+                          next[qi] = oi;
+                          setPostCallAnswers(next);
+                        }}
+                        className={'w-full text-left text-xs p-2 rounded-lg border transition-all cursor-pointer ' +
+                          (postCallAnswers[qi] === oi
+                            ? 'bg-amber/15 border-amber text-ink font-semibold'
+                            : 'bg-card border-border text-ink hover:border-amber/40')}
+                      >
+                        {opt}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex items-center gap-2 pt-2 border-t border-border">
+              <button
+                type="button"
+                onClick={() => setShowPostCallQuiz(false)}
+                className="py-2.5 px-4 text-xs text-muted hover:text-ink cursor-pointer"
+              >
+                Skip Check
+              </button>
+              <button
+                type="button"
+                onClick={handleSubmitPostCallQuiz}
+                disabled={postCallAnswers.some((a) => a === -1) || postCallSubmitted}
+                className="flex-1 py-2.5 bg-amber hover:bg-terracotta text-white font-bold text-xs rounded-xl shadow-xs transition-all disabled:opacity-50 cursor-pointer"
+              >
+                {postCallSubmitted ? '✓ Verified (+25 XP)' : 'Submit Peer Assessment (+25 XP)'}
+              </button>
+            </div>
           </div>
         </div>
       )}
 
-      {/* ─── Section 6: Tier 3 Safe Educational Video Modal ─────────── */}
+      {/* ─── Section 6: Tier 3 Safe Educational Video Modal (Zero-Dopamine Study Lock) ─────────── */}
       {showVideoModal && tier3Video && (
         <div className="fixed inset-0 z-[120] bg-ink/75 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
           <div className="bg-card border border-border rounded-[24px] max-w-3xl w-full p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-2 border-b border-border">
               <div>
-                <span className="text-[10px] font-bold uppercase tracking-wider text-amber">
-                  Curated Educational Video • Safe Player
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-amber">
+                    Curated Educational Video
+                  </span>
+                  <span className="text-[10px] font-bold uppercase tracking-wider bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 px-2 py-0.5 rounded-full border border-emerald-500/20">
+                    🛡️ Zero-Dopamine Shield Active
+                  </span>
+                </div>
                 <h3 className="font-serif font-bold text-ink text-base">{tier3Video.title}</h3>
               </div>
               <div className="flex items-center gap-2">
@@ -2627,16 +2698,30 @@ function useAsync(asyncFn) {
               </div>
             </div>
 
+            {/* Zero-Dopamine Distraction-Free Shield Banner */}
+            <div className="p-3 bg-amber/10 border border-amber/30 rounded-xl flex items-center justify-between text-xs text-ink">
+              <div className="flex items-center gap-2">
+                <span className="text-base">🔒</span>
+                <span className="font-semibold text-amber-800 dark:text-amber-300">Distraction-Free Study Lock:</span>
+                <span className="text-[11px] text-muted">
+                  External popups, YouTube shorts, and recommended videos are strictly sandboxed. Only this curated lesson is active.
+                </span>
+              </div>
+              <span className="text-[10px] uppercase font-mono font-bold bg-amber/20 text-amber px-2 py-0.5 rounded-md">
+                Focus Mode
+              </span>
+            </div>
+
             <p className="text-xs text-ink/80">{tier3Video.message}</p>
 
-            {/* Safe Embedded YouTube Player: rel=0, modestbranding=1, controls=1, disablekb=1 */}
-            <div className="aspect-video w-full rounded-2xl overflow-hidden bg-black shadow-md flex items-center justify-center">
+            {/* Safe Sandboxed YouTube Player: omits allow-popups so user cannot escape to youtube.com */}
+            <div className="aspect-video w-full rounded-2xl overflow-hidden bg-black shadow-md flex items-center justify-center relative">
               {!isVideoEnded ? (
                 <iframe
-                  src={`https://www.youtube-nocookie.com/embed/${tier3Video.youtubeId}?rel=0&modestbranding=1&controls=1&disablekb=1&enablejsapi=1`}
+                  src={`https://www.youtube-nocookie.com/embed/${tier3Video.youtubeId}?rel=0&modestbranding=1&controls=1&disablekb=1&enablejsapi=1&iv_load_policy=3&fs=0`}
                   className="w-full h-full border-0"
                   allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                  allowFullScreen
+                  sandbox="allow-scripts allow-same-origin allow-presentation"
                   title={tier3Video.title}
                 />
               ) : (
