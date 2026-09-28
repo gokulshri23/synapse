@@ -94,6 +94,12 @@ export default function NativeCallView({
   const myId = (currentUserEmail || currentUserName || 'user').toLowerCase().trim();
   const targetPeerId = (peerEmail || peerName || 'peer').toLowerCase().trim();
 
+  // Engine: 'instant' (No-Login Instant Room) vs 'webrtc' (Direct P2P TURN)
+  const [callEngine, setCallEngine] = useState<'instant' | 'webrtc'>('instant');
+  const cleanRoomName = 'synapse_' + effectiveRoomName.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const userFirst = encodeURIComponent((currentUserName || 'Student').split(' ')[0]);
+  const instantRoomUrl = `https://vdo.ninja/?room=${encodeURIComponent(cleanRoomName)}&label=${userFirst}&webcam=${mode === 'video' ? '1' : '0'}&autostart&darkmode&transparent`;
+
   // Screen share availability check (desktop only, missing on mobile)
   const isDisplayMediaSupported =
     typeof navigator !== 'undefined' &&
@@ -418,9 +424,11 @@ export default function NativeCallView({
     }
   }, [mode, myId, targetPeerId, effectiveRoomName, isInitiator, sendSignal, setupLocalAudioMeter, setupRemoteAudioMeter, refreshDevices]);
 
-  // Mount media & WebRTC connection ONCE. Do NOT recreate on every timer tick!
+  // Mount media & WebRTC connection when in webrtc mode
   useEffect(() => {
-    initConnection();
+    if (callEngine === 'webrtc') {
+      initConnection();
+    }
 
     return () => {
       if (localAnimRef.current) cancelAnimationFrame(localAnimRef.current);
@@ -432,20 +440,21 @@ export default function NativeCallView({
       if (pcRef.current) pcRef.current.close();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [callEngine]);
 
   // Ensure local video element rebinds when camera toggles
   useEffect(() => {
-    if (localVideoRef.current && localStreamRef.current && mode === 'video' && !videoOff) {
+    if (callEngine === 'webrtc' && localVideoRef.current && localStreamRef.current && mode === 'video' && !videoOff) {
       if (localVideoRef.current.srcObject !== localStreamRef.current) {
         localVideoRef.current.srcObject = localStreamRef.current;
         localVideoRef.current.play().catch(() => {});
       }
     }
-  }, [videoOff, mode]);
+  }, [callEngine, videoOff, mode]);
 
   // ─── WebRTC Signaling Poller (350ms interval) ─────────────────
   useEffect(() => {
+    if (callEngine !== 'webrtc') return;
     let isMounted = true;
     let lastSince = Date.now() - 30000;
     let pollCount = 0;
@@ -749,7 +758,7 @@ export default function NativeCallView({
         <div className="flex items-center gap-2 bg-ink/80 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/10 shadow-lg pointer-events-auto">
           <span
             className={`w-2 h-2 rounded-full ${
-              peerConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'
+              (callEngine === 'instant' || peerConnected) ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'
             }`}
           />
           <span className="text-xs font-semibold text-white/90">
@@ -761,16 +770,61 @@ export default function NativeCallView({
         </div>
 
         <div className="flex items-center gap-2 pointer-events-auto">
-          <div className="flex items-center gap-1.5 bg-ink/80 backdrop-blur-md px-2.5 py-1 rounded-full border border-white/10 text-[11px] text-zinc-300">
-            <span className="text-emerald-400">🔒</span>
-            <span className="hidden sm:inline">Encrypted TURN WebRTC</span>
+          {/* Dual Engine Switcher */}
+          <div className="flex items-center gap-1 bg-ink/90 p-1 rounded-full border border-white/10 text-[11px] shadow-lg">
+            <button
+              type="button"
+              onClick={() => setCallEngine('instant')}
+              className={`px-3 py-1 rounded-full font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                callEngine === 'instant'
+                  ? 'bg-amber text-ink shadow'
+                  : 'text-zinc-400 hover:text-white'
+              }`}
+            >
+              <span>⚡</span>
+              <span>Instant Room (No Login)</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setCallEngine('webrtc')}
+              className={`px-3 py-1 rounded-full font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                callEngine === 'webrtc'
+                  ? 'bg-emerald-500 text-ink shadow'
+                  : 'text-zinc-400 hover:text-white'
+              }`}
+            >
+              <span>🔒</span>
+              <span>Direct P2P</span>
+            </button>
           </div>
+
+          {callEngine === 'instant' && (
+            <button
+              type="button"
+              onClick={() => window.open(instantRoomUrl, '_blank', 'width=1000,height=650')}
+              className="hidden sm:flex items-center gap-1 bg-ink/80 hover:bg-zinc-800 backdrop-blur-md px-2.5 py-1.5 rounded-full border border-white/10 text-[11px] text-zinc-300 cursor-pointer transition-colors"
+              title="Open room in new popup window"
+            >
+              <span>↗️</span>
+              <span>Pop Out</span>
+            </button>
+          )}
         </div>
       </div>
 
       {/* ─── Main Video / Screen Area ─────────────────────────────── */}
-      <div className="flex-1 relative flex items-center justify-center overflow-hidden p-3 pt-12 pb-20">
-        {permissionError && (
+      <div className="flex-1 relative flex items-center justify-center overflow-hidden p-3 pt-14 pb-20">
+        {callEngine === 'instant' ? (
+          <div className="w-full h-full relative rounded-2xl overflow-hidden bg-black/95 flex flex-col border border-white/10 shadow-2xl">
+            <iframe
+              src={instantRoomUrl}
+              allow="camera; microphone; fullscreen; display-capture; autoplay"
+              className="w-full h-full border-0 flex-1 rounded-2xl"
+            />
+          </div>
+        ) : (
+          <>
+            {permissionError && (
           <div className="absolute top-14 left-4 right-4 z-30 bg-amber/95 text-ink text-xs p-3 rounded-xl border border-amber font-medium shadow-2xl flex flex-col sm:flex-row items-center justify-between gap-2 animate-slide-down">
             <span>{permissionError}</span>
             <div className="flex items-center gap-2 shrink-0">
@@ -905,52 +959,58 @@ export default function NativeCallView({
             </div>
           </div>
         )}
+          </>
+        )}
       </div>
 
       {/* ─── Floating Bottom Control Bar ──────────────────────────── */}
       <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-30 flex items-center gap-3 bg-zinc-900/90 backdrop-blur-xl px-5 py-2.5 rounded-full border border-white/15 shadow-2xl">
-        {/* Mic Button */}
-        <button
-          onClick={toggleMic}
-          className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold transition-all cursor-pointer ${
-            micMuted
-              ? 'bg-bad text-white shadow-bad/40 shadow-lg'
-              : 'bg-white/10 text-white hover:bg-white/20'
-          }`}
-          title={micMuted ? 'Unmute Microphone' : 'Mute Microphone'}
-        >
-          {micMuted ? '🔇' : '🎙️'}
-        </button>
+        {callEngine === 'webrtc' && (
+          <>
+            {/* Mic Button */}
+            <button
+              onClick={toggleMic}
+              className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold transition-all cursor-pointer ${
+                micMuted
+                  ? 'bg-bad text-white shadow-bad/40 shadow-lg'
+                  : 'bg-white/10 text-white hover:bg-white/20'
+              }`}
+              title={micMuted ? 'Unmute Microphone' : 'Mute Microphone'}
+            >
+              {micMuted ? '🔇' : '🎙️'}
+            </button>
 
-        {/* Video Button */}
-        <button
-          onClick={toggleCamera}
-          className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold transition-all cursor-pointer ${
-            videoOff
-              ? 'bg-zinc-800 text-zinc-400 hover:text-white'
-              : 'bg-white/10 text-white hover:bg-white/20'
-          }`}
-          title={videoOff ? 'Turn On Camera' : 'Turn Off Camera'}
-        >
-          {videoOff ? '📷' : '📹'}
-        </button>
+            {/* Video Button */}
+            <button
+              onClick={toggleCamera}
+              className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold transition-all cursor-pointer ${
+                videoOff
+                  ? 'bg-zinc-800 text-zinc-400 hover:text-white'
+                  : 'bg-white/10 text-white hover:bg-white/20'
+              }`}
+              title={videoOff ? 'Turn On Camera' : 'Turn Off Camera'}
+            >
+              {videoOff ? '📷' : '📹'}
+            </button>
 
-        {/* Screen Share Button (Desktop Only: hidden on phones where getDisplayMedia is missing) */}
-        {isDisplayMediaSupported && (
-          <button
-            onClick={toggleScreenShare}
-            className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold transition-all cursor-pointer ${
-              isScreenSharing
-                ? 'bg-amber text-white shadow-amber/40 shadow-lg'
-                : 'bg-white/10 text-white hover:bg-white/20'
-            }`}
-            title={isScreenSharing ? 'Stop Sharing Screen' : 'Share Screen'}
-          >
-            🖥️
-          </button>
+            {/* Screen Share Button (Desktop Only: hidden on phones where getDisplayMedia is missing) */}
+            {isDisplayMediaSupported && (
+              <button
+                onClick={toggleScreenShare}
+                className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold transition-all cursor-pointer ${
+                  isScreenSharing
+                    ? 'bg-amber text-white shadow-amber/40 shadow-lg'
+                    : 'bg-white/10 text-white hover:bg-white/20'
+                }`}
+                title={isScreenSharing ? 'Stop Sharing Screen' : 'Share Screen'}
+              >
+                🖥️
+              </button>
+            )}
+
+            <div className="w-[1px] h-6 bg-white/20 mx-1" />
+          </>
         )}
-
-        <div className="w-[1px] h-6 bg-white/20 mx-1" />
 
         {/* End Call Button */}
         <button
