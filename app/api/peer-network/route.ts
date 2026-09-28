@@ -41,11 +41,12 @@ export async function POST(req: Request) {
   try {
     const body = await req.json();
 
-    // Case 1: WebRTC Signaling packet (Offer / Answer / ICE candidate)
+    // Case 1: WebRTC Signaling packet (Offer / Answer / ICE candidate / Call End)
     if (
       body.type === 'webrtc_offer' ||
       body.type === 'webrtc_answer' ||
-      body.type === 'webrtc_candidate'
+      body.type === 'webrtc_candidate' ||
+      body.type === 'webrtc_call_end'
     ) {
       const signal = addSignalingMessage({
         sessionId: body.sessionId || 'global_collab',

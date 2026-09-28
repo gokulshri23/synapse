@@ -601,6 +601,26 @@ function useAsync(asyncFn) {
               setIncomingCall(null);
             }
 
+            // If currently in a live call, check if peer broadcasted call_end
+            if (isCallModalOpen) {
+              const callEndEvent = data.messages
+                .slice()
+                .reverse()
+                .find((m: any) => {
+                  if (m.type !== 'call_end') return false;
+                  const senderLower = (m.senderId || '').trim().toLowerCase();
+                  if (myEmailLower && senderLower === myEmailLower) return false;
+                  if (m.createdAt && Date.now() - m.createdAt > 20000) return false;
+                  return true;
+                });
+
+              if (callEndEvent) {
+                setIsCallModalOpen(false);
+                setCallUrl(null);
+                showToast('Call ended by peer partner.');
+              }
+            }
+
             // Check for peer submitted trigger
             data.messages.forEach((m: any) => {
               if (m.text && m.text.includes('submitted the collaborative challenge')) {

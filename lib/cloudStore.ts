@@ -286,7 +286,7 @@ export interface CloudSignalingMessage {
   sessionId: string;
   senderId: string;
   recipientId: string;
-  type: 'webrtc_offer' | 'webrtc_answer' | 'webrtc_candidate';
+  type: 'webrtc_offer' | 'webrtc_answer' | 'webrtc_candidate' | 'webrtc_call_end';
   payload: any;
   createdAt: number;
 }

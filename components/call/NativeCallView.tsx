@@ -216,6 +216,12 @@ export default function NativeCallView({
         pc.onconnectionstatechange = () => {
           if (pc.connectionState === 'connected') {
             setPeerConnected(true);
+          } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'closed') {
+            setTimeout(() => {
+              if (pc.connectionState === 'disconnected' || pc.connectionState === 'closed') {
+                onEndCall(callDuration);
+              }
+            }, 800);
           }
         };
 
@@ -358,6 +364,9 @@ export default function NativeCallView({
               } else {
                 pendingCandidatesRef.current.push(sig.payload);
               }
+            } else if (sig.type === 'webrtc_call_end') {
+              onEndCall(callDuration);
+              return;
             }
           }
         }
@@ -485,6 +494,23 @@ export default function NativeCallView({
       }
       setIsScreenSharing(false);
     }
+  };
+
+  const handleLocalEndCall = () => {
+    // Notify peer immediately through call room signaling
+    fetch('/api/peer-network', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type: 'webrtc_call_end',
+        sessionId,
+        senderId: myId,
+        recipientId: targetPeerId,
+        callDuration,
+      }),
+    }).catch(() => {});
+
+    onEndCall(callDuration);
   };
 
   const peerInitials = peerName
@@ -685,7 +711,7 @@ export default function NativeCallView({
 
         {/* End Call Button */}
         <button
-          onClick={() => onEndCall(callDuration)}
+          onClick={handleLocalEndCall}
           className="px-5 py-2 rounded-full bg-bad hover:bg-red-700 text-white font-bold text-xs shadow-lg transition-colors cursor-pointer flex items-center gap-1.5"
         >
           <span>✕</span> End Call
