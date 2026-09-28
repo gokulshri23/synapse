@@ -3,6 +3,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import DailyIframe, { DailyCall } from '@daily-co/daily-js';
 import CallDebugPanel, { ParticipantDebugState } from './CallDebugPanel';
+import NativeCallView from './NativeCallView';
 
 interface DailyPrebuiltCallProps {
   roomName: string;
@@ -86,6 +87,21 @@ export default function DailyPrebuiltCall({
 
   const isDailyHosted = Boolean(roomUrl && roomUrl.includes('.daily.co'));
 
+  if (!isDailyHosted) {
+    return (
+      <NativeCallView
+        mode={mode}
+        peerName={peerName}
+        currentUserName={currentUserName}
+        currentUserEmail={currentUserEmail}
+        peerEmail={peerEmail}
+        sessionId={roomName}
+        callId={callId}
+        roomName={roomName}
+        onEndCall={onEndCall}
+      />
+    );
+  }
   // ─── Destroy Call Frame Cleanly ───────────────────────────────
   const destroyCallFrame = useCallback(() => {
     if (callFrameRef.current) {

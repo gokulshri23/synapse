@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { createClient } from '@supabase/supabase-js';
 import {
   getActivePeers,
   updatePeerHeartbeat,
@@ -7,6 +8,13 @@ import {
   addSignalingMessage,
   getSignalingMessages,
 } from '@/lib/cloudStore';
+
+function getSupabase() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!url || !key) return null;
+  return createClient(url, key);
+}
 
 export async function GET(req: Request) {
   try {
@@ -19,7 +27,64 @@ export async function GET(req: Request) {
 
     // If querying WebRTC signaling
     if (isSignaling && sessionId && forUserId) {
-      const signals = getSignalingMessages(sessionId, forUserId, sinceTime);
+      const normUser = forUserId.toLowerCase().trim();
+      const userPrefix = normUser.split('@')[0];
+      const supabase = getSupabase();
+      let signals: any[] = [];
+
+      if (supabase) {
+        try {
+          const sinceIso = sinceTime > 0 ? new Date(sinceTime).toISOString() : new Date(Date.now() - 30000).toISOString();
+          const { data, error } = await supabase
+            .from('messages')
+            .select('*')
+            .eq('thread_id', sessionId)
+            .eq('thread_type', 'webrtc_signal')
+            .gt('created_at', sinceIso)
+            .order('created_at', { ascending: true })
+            .limit(50);
+
+          if (!error && Array.isArray(data)) {
+            for (const item of data) {
+              const sSender = (item.sender_email || '').toLowerCase().trim();
+              const senderPrefix = sSender.split('@')[0];
+              // Don't return signals sent by self
+              if (sSender === normUser || senderPrefix === userPrefix) continue;
+
+              // Check recipient
+              const sRec = (item.sender_name || '').toLowerCase().trim();
+              const recPrefix = sRec.split('@')[0];
+              if (sRec && sRec !== normUser && recPrefix !== userPrefix) continue;
+
+              let parsedPayload: any = {};
+              try {
+                parsedPayload = JSON.parse(item.content || '{}');
+              } catch (e) {
+                parsedPayload = item.content;
+              }
+
+              signals.push({
+                id: item.id,
+                sessionId: item.thread_id,
+                senderId: item.sender_email,
+                recipientId: item.sender_name,
+                type: item.type,
+                payload: parsedPayload,
+                createdAt: new Date(item.created_at).getTime(),
+              });
+            }
+          }
+        } catch (e) {}
+      }
+
+      // Merge memory cloudStore fallbacks if needed
+      const memSignals = getSignalingMessages(sessionId, forUserId, sinceTime);
+      for (const ms of memSignals) {
+        if (!signals.some((s) => s.id === ms.id || (s.type === ms.type && Math.abs(s.createdAt - ms.createdAt) < 500))) {
+          signals.push(ms);
+        }
+      }
+
       return NextResponse.json({ signals });
     }
 
@@ -46,12 +111,31 @@ export async function POST(req: Request) {
       body.type?.startsWith('webrtc_') ||
       body.type?.startsWith('screen_share_')
     ) {
+      const sessKey = body.sessionId || 'global_collab';
+      const senderId = (body.senderId || 'anon').toLowerCase().trim();
+      const recipientId = (body.recipientId || '').toLowerCase().trim();
+      const payloadData = body.offer || body.answer || body.candidate || body.payload || {};
+
+      const supabase = getSupabase();
+      if (supabase) {
+        try {
+          await supabase.from('messages').insert({
+            thread_id: sessKey,
+            thread_type: 'webrtc_signal',
+            sender_name: recipientId,
+            sender_email: senderId,
+            type: body.type,
+            content: JSON.stringify(payloadData),
+          });
+        } catch (e) {}
+      }
+
       const signal = addSignalingMessage({
-        sessionId: body.sessionId || 'global_collab',
-        senderId: body.senderId || 'anon',
-        recipientId: body.recipientId,
+        sessionId: sessKey,
+        senderId,
+        recipientId,
         type: body.type,
-        payload: body.offer || body.answer || body.candidate || body.payload,
+        payload: payloadData,
       });
       return NextResponse.json({ success: true, signal });
     }

@@ -353,6 +353,7 @@ function loadStore(): CloudStoreData {
         session_summaries: Array.isArray(parsed.session_summaries) ? parsed.session_summaries : [],
         teaching_stats: parsed.teaching_stats || {},
         calls: parsed.calls || {},
+        signaling: parsed.signaling || {},
       };
       return global.__synapse_cloud_cache;
     }
