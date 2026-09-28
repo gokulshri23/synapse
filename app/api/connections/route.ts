@@ -28,14 +28,28 @@ export async function GET(req: Request) {
 
     const normUser = userId.trim().toLowerCase();
     const supabase = getSupabase();
+    let userUuid = '';
 
     // Query Supabase if available to ensure cross-device and reload persistence
     if (supabase) {
       try {
+        try {
+          const { data: prof } = await supabase
+            .from('profiles')
+            .select('id')
+            .eq('email', normUser)
+            .maybeSingle();
+          if (prof?.id) userUuid = prof.id;
+        } catch (e) {}
+
+        const orFilter = userUuid
+          ? `requester_id.ilike.${normUser},recipient_id.ilike.${normUser},requester_id.eq.${userUuid},recipient_id.eq.${userUuid}`
+          : `requester_id.ilike.${normUser},recipient_id.ilike.${normUser}`;
+
         const { data: dbConns, error } = await supabase
           .from('connections')
           .select('*')
-          .or(`requester_id.ilike.${normUser},recipient_id.ilike.${normUser}`);
+          .or(orFilter);
 
         if (!error && Array.isArray(dbConns)) {
           // Sync database state into local memory store
@@ -63,7 +77,15 @@ export async function GET(req: Request) {
       }
     }
 
-    const conns = getConnectionsForUser(normUser);
+    let conns = getConnectionsForUser(normUser);
+    if (userUuid && (conns.active.length === 0 && conns.pendingIncoming.length === 0 && conns.pendingOutgoing.length === 0)) {
+      const uuidConns = getConnectionsForUser(userUuid);
+      conns = {
+        active: [...conns.active, ...uuidConns.active],
+        pendingIncoming: [...conns.pendingIncoming, ...uuidConns.pendingIncoming],
+        pendingOutgoing: [...conns.pendingOutgoing, ...uuidConns.pendingOutgoing],
+      };
+    }
     return NextResponse.json({ success: true, ...conns });
   } catch (err: any) {
     return NextResponse.json({ success: false, error: err?.message }, { status: 500 });

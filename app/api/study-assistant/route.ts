@@ -201,11 +201,33 @@ Return ONLY the concise concept name (1 to 4 words). Do not include formatting, 
     // Check if AI previously intervened in last 6 messages
     const last6 = textMessages.slice(-6);
     const hasPreviousAiIntervention = last6.some(
-      (m: any) => m.type === 'ai_rephrase' || m.type === 'ai_fallback' || m.sender === 'ai'
+      (m: any) =>
+        m.type === 'study_assistant' ||
+        m.type === 'ai_rephrase' ||
+        m.type === 'ai_fallback' ||
+        m.sender === 'ai' ||
+        (m.senderName && (m.senderName.includes('AI') || m.senderName.includes('Tutor')))
     );
-    const recentConfusionAfterAi = hasPreviousAiIntervention && last6.some((m: any) => isConfusionMsg(m.text));
 
-    // --- STEP 3: Still confused after AI explanation -> Embed ONE video ---
+    // Subsequent confusion patterns: user explicitly indicates the previous explanation didn't resolve their doubt
+    const SUBSEQUENT_CONFUSION_PATTERNS = [
+      /still.*(?:confus|don'?t understand|don'?t get|hard|lost|stuck|not clear)/i,
+      /can'?t.*understand/i,
+      /don'?t.*get.*it/i,
+      /explain.*again/i,
+      /explain.*differently/i,
+      /need.*(?:video|visual|tutorial)/i,
+      /video/i,
+      /youtube/i,
+      /puriyala/i,
+      /theriyala/i,
+      /innum.*purila/i,
+    ];
+
+    const isExplicitSubsequentConfusion = SUBSEQUENT_CONFUSION_PATTERNS.some((pat) => pat.test(latestText));
+    const recentConfusionAfterAi = hasPreviousAiIntervention && (isExplicitSubsequentConfusion || isConfusionMsg(latestText));
+
+    // --- STEP 3: Still confused after AI explanation -> Embed ONE targeted video ---
     if (recentConfusionAfterAi) {
       lastInterventionTimes[sessionId] = now;
       const video = getVideoForTopic(extractedConcept || topic);

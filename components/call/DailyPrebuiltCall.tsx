@@ -558,8 +558,22 @@ export default function DailyPrebuiltCall({
       <div
         ref={containerRef}
         className="w-full h-full flex-1 relative overflow-hidden"
-        style={{ minHeight: '420px' }}
+        style={{ minHeight: '480px' }}
       />
+      {!isDailyHosted && (
+        <div className="py-2 px-4 bg-[#141210] border-t border-white/10 flex items-center justify-between text-[11px] text-zinc-400 shrink-0">
+          <span>🔒 Encrypted Peer Stage: <strong className="text-amber">{roomName}</strong></span>
+          <a
+            href={`https://meet.jit.si/${(roomName || 'synapse-call').replace(/[^a-zA-Z0-9_-]/g, '_')}#config.startWithVideoMuted=${mode === 'voice'}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-amber hover:underline flex items-center gap-1 font-semibold"
+          >
+            <span>Open in Dedicated Tab</span>
+            <span>↗</span>
+          </a>
+        </div>
+      )}
     </div>
   );
 }

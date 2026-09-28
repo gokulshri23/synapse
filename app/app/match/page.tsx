@@ -2,7 +2,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { MOCK_PEERS } from '@/lib/constants';
 import { createClient } from '@/lib/supabase/client';
 import {
   runPeerMatchingAgent,
@@ -324,8 +323,8 @@ export default function MatchPage() {
 
             const lvl = p.skill_level || 'intermediate';
             discoveredPeers.push({
-              id: p.id,
-              name: p.full_name || p.email.split('@')[0],
+              id: p.email || p.id,
+              name: p.full_name || (p.email ? p.email.split('@')[0] : 'Peer'),
               email: p.email,
               avatar: p.avatar_url,
               domain: track,
@@ -340,42 +339,33 @@ export default function MatchPage() {
       }
     } catch (e) {}
 
-    // Augment with rich active community peers (MOCK_PEERS) to ensure user's teaching/seeking selections always match!
-    const mockPeersMapped = MOCK_PEERS.map((mp, idx) => {
-      const peerLvl = [3, 4, 3, 4, 5, 4, 3, 4, 4][idx % 9];
-      return {
-        id: `mock_peer_${mp.id}`,
-        name: mp.name,
-        email: `${mp.name.toLowerCase().replace(/\s+/g, '.')}@synapse.edu`,
-        avatar: mp.avatar_url,
-        domain: mp.offers[0] || 'React',
-        level: peerLvl,
-        numeric_level: peerLvl,
-        offers: mp.offers,
-        needs: mp.needs,
-        onboarding_complete: true,
-        verified: true,
-        verified_level: peerLvl,
-        isRealPeer: false,
-      };
-    });
-
-    const peersPool = [...discoveredPeers];
-    mockPeersMapped.forEach((mp) => {
-      if (
-        !peersPool.some(
-          (p) =>
-            (p.email && p.email.toLowerCase() === mp.email.toLowerCase()) ||
-            p.id === mp.id
-        )
-      ) {
-        peersPool.push(mp);
-      }
-    });
-
     // Step 1 to 14: Execute the Autonomous Peer Matching Agent
     const activeOffers = customOffers && customOffers.length > 0 ? customOffers : canTeach;
     const activeNeeds = customNeeds && customNeeds.length > 0 ? customNeeds : seekingGuidance;
+
+    // Only real peers from Supabase & Peer Network (no fake/mock peers)
+    const peersPool = [...discoveredPeers];
+
+    // Professor / User Innovation: If no human peer is found for this subject,
+    // provide the Autonomous AI Peer Tutor so the student can learn immediately!
+    if (peersPool.length === 0) {
+      peersPool.push({
+        id: 'peer-ai-tutor',
+        name: '🤖 Synapse AI Peer Tutor',
+        email: 'ai-tutor@synapse.edu',
+        avatar: 'https://ui-avatars.com/api/?name=AI+Tutor&background=D97706&color=fff',
+        domain: currentDomain,
+        level: 5,
+        numeric_level: 5,
+        offers: [currentDomain, 'Problem Solving', 'Code Architecture', 'Interview Prep'],
+        needs: activeOffers.length > 0 ? activeOffers : ['General'],
+        onboarding_complete: true,
+        verified: true,
+        verified_level: 5,
+        isRealPeer: false,
+        isAiTutor: true,
+      });
+    }
 
     let userVerifiedLevel: number | null = null;
     try {
@@ -488,6 +478,25 @@ export default function MatchPage() {
   const handleSendConnectionRequest = async (match: PeerMatchResult) => {
     const myId = (studentEmail || studentName).trim().toLowerCase();
     const peerNorm = match.peerId.trim().toLowerCase();
+
+    // Special: AI Peer Tutor connects immediately without asynchronous peer handshake
+    if (match.peerId === 'peer-ai-tutor' || match.peerName.includes('AI Peer Tutor')) {
+      const tutorPeer = {
+        id: 'peer-ai-tutor',
+        name: '🤖 Synapse AI Peer Tutor',
+        domain: match.primarySkill || domain,
+        isReal: false,
+        isAiTutor: true,
+      };
+      localStorage.setItem('synapse_active_peer', JSON.stringify(tutorPeer));
+      if (myId) {
+        localStorage.setItem(`synapse_active_peer_${myId}`, JSON.stringify(tutorPeer));
+      }
+      setConnectToast('Starting 1-on-1 session with Synapse AI Peer Tutor...');
+      setTimeout(() => router.push('/app/sessions'), 600);
+      return;
+    }
+
     const updatedPending = { ...pendingOutgoing, [peerNorm]: true };
     setPendingOutgoing(updatedPending);
     localStorage.setItem('synapse_pending_outgoing', JSON.stringify(updatedPending));
@@ -506,6 +515,9 @@ export default function MatchPage() {
       isReal: true,
     };
     localStorage.setItem('synapse_active_peer', JSON.stringify(activePeerObj));
+    if (myId) {
+      localStorage.setItem(`synapse_active_peer_${myId}`, JSON.stringify(activePeerObj));
+    }
 
     try {
       const res = await fetch('/api/connections', {
@@ -789,15 +801,19 @@ export default function MatchPage() {
   };
 
   const handleOpenChat = (peerName: string, peerId: string, skill: string) => {
-    localStorage.setItem(
-      'synapse_active_peer',
-      JSON.stringify({
-        id: peerId,
-        name: peerName,
-        domain: skill,
-        isReal: true,
-      })
-    );
+    const isAi = peerId === 'peer-ai-tutor' || peerName.includes('AI Peer Tutor');
+    const peerData = {
+      id: peerId,
+      name: peerName,
+      domain: skill,
+      isReal: !isAi,
+      isAiTutor: isAi,
+    };
+    localStorage.setItem('synapse_active_peer', JSON.stringify(peerData));
+    const myId = (studentEmail || studentName || '').trim().toLowerCase();
+    if (myId) {
+      localStorage.setItem(`synapse_active_peer_${myId}`, JSON.stringify(peerData));
+    }
     router.push('/app/sessions');
   };
 
@@ -1740,8 +1756,17 @@ export default function MatchPage() {
                                   onClick={() => handleSendConnectionRequest(match)}
                                   className="flex-1 py-2.5 px-3.5 bg-amber hover:bg-terracotta text-white text-xs font-bold rounded-xl shadow-xs transition-all active:scale-98 cursor-pointer flex items-center justify-center gap-1.5"
                                 >
-                                  <span>🤝</span>
-                                  <span>Connect</span>
+                                  {match.peerId === 'peer-ai-tutor' ? (
+                                    <>
+                                      <span>⚡</span>
+                                      <span>Start 1-on-1 Session</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <span>🤝</span>
+                                      <span>Connect</span>
+                                    </>
+                                  )}
                                 </button>
                               </div>
                             )}

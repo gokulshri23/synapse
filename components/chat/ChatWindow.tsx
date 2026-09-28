@@ -30,6 +30,7 @@ export interface ChatWindowProps {
     initials: string;
     skill: string;
     isReal?: boolean;
+    isAiTutor?: boolean;
     avatarUrl?: string;
   };
   isConnectionAccepted: boolean;
@@ -76,7 +77,7 @@ export default function ChatWindow({
 }: ChatWindowProps) {
   // ─── Local Component State ─────────────────────────────────────
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
-    if (typeof window !== 'undefined' && threadId) {
+    if (typeof window !== 'undefined' && threadId && !threadId.includes('peer-live') && !threadId.includes('Waiting')) {
       try {
         const cached = localStorage.getItem('synapse_chat_' + threadId);
         if (cached) {
@@ -300,8 +301,9 @@ export default function ChatWindow({
       triggerStudyAssistantCheck([...messages, optimisticMsg]);
     }
 
-    // Handle AI peer automated replies for demo/bot peers
-    if (!activePeer.isReal || activePeer.name.includes('Demo') || activePeer.name.includes('Waiting')) {
+    // Handle AI peer automated replies strictly for explicit AI Peer Tutor sessions
+    const isExplicitAiTutor = activePeer.id === 'peer-ai-tutor' || activePeer.name.includes('AI Peer Tutor') || activePeer.id === 'peer-maya';
+    if (isExplicitAiTutor) {
       setIsPeerTyping(true);
       try {
         const res = await fetch('/api/peer-chat', {
@@ -318,7 +320,7 @@ export default function ChatWindow({
           const data = await res.json();
           setTimeout(async () => {
             setIsPeerTyping(false);
-            const peerReply = data.reply || "That's a great thought! Let's build on this solution together.";
+            const peerReply = data.reply || "Let's explore this step by step. What approach do you think we should try first?";
             try {
               await fetch('/api/messages', {
                 method: 'POST',
@@ -604,12 +606,22 @@ export default function ChatWindow({
         <div className="flex items-center gap-2.5">
           <span className="w-2.5 h-2.5 rounded-full bg-ok animate-pulse" />
           <span className="text-xs font-bold text-ink uppercase tracking-wider">
-            Discussion with {activePeer.name}
+            {activePeer.name.includes('Waiting')
+              ? 'Study Room (Waiting for Partner)'
+              : activePeer.name.includes('Wants to Connect')
+              ? `Connection Request: ${activePeer.name}`
+              : activePeer.isAiTutor || activePeer.id === 'peer-ai-tutor'
+              ? '1-on-1 Session with AI Peer Tutor'
+              : `Discussion with ${activePeer.name}`}
           </span>
         </div>
         <div className="flex items-center gap-2">
           <span className="text-[11px] text-muted font-mono">
-            {activePeer.isReal ? 'Private Peer Socket' : 'Gemini AI Co-Pilot'}
+            {activePeer.isReal
+              ? 'Private Peer Socket'
+              : activePeer.isAiTutor || activePeer.id === 'peer-ai-tutor'
+              ? 'AI Pedagogical Tutor Active'
+              : 'Connecting...'}
           </span>
           {preScore !== null && postScore === null && onTakePostQuiz && (
             <button
@@ -738,13 +750,37 @@ export default function ChatWindow({
       >
         {messages.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center text-center p-6 text-muted">
-            <div className="w-12 h-12 rounded-full bg-card-alt border border-border flex items-center justify-center text-2xl mb-2">
-              💬
-            </div>
-            <p className="text-xs font-semibold text-ink">Private thread with {activePeer.name}</p>
-            <p className="text-[11px] text-muted max-w-xs mt-0.5">
-              Messages and calls in this thread are private and isolated to this friend connection.
-            </p>
+            {activePeer.isAiTutor || activePeer.id === 'peer-ai-tutor' ? (
+              <>
+                <div className="w-12 h-12 rounded-full bg-amber/15 text-amber flex items-center justify-center text-2xl mb-2">
+                  🤖
+                </div>
+                <p className="text-xs font-semibold text-ink">Synapse AI Peer Tutor Active</p>
+                <p className="text-[11px] text-muted max-w-xs mt-0.5">
+                  Ask any question, discuss challenge concepts, or request code reviews! I am here to teach and mentor you in {studentTrack}.
+                </p>
+              </>
+            ) : activePeer.name.includes('Waiting') ? (
+              <>
+                <div className="w-12 h-12 rounded-full bg-card-alt border border-border flex items-center justify-center text-2xl mb-2">
+                  👥
+                </div>
+                <p className="text-xs font-semibold text-ink">Waiting for a Peer Partner</p>
+                <p className="text-[11px] text-muted max-w-xs mt-0.5">
+                  Connect with another learner from the Match page, or learn with the AI Peer Tutor to study right away!
+                </p>
+              </>
+            ) : (
+              <>
+                <div className="w-12 h-12 rounded-full bg-card-alt border border-border flex items-center justify-center text-2xl mb-2">
+                  💬
+                </div>
+                <p className="text-xs font-semibold text-ink">Private thread with {activePeer.name}</p>
+                <p className="text-[11px] text-muted max-w-xs mt-0.5">
+                  Messages and calls in this thread are private and isolated to this friend connection.
+                </p>
+              </>
+            )}
           </div>
         ) : (
           messages.map(renderMessage)

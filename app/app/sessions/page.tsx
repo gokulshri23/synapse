@@ -111,21 +111,27 @@ export default function SessionsPage() {
     initials: string;
     skill: string;
     isReal?: boolean;
+    isAiTutor?: boolean;
     connectionId?: string;
   }>(() => {
     if (typeof window !== 'undefined') {
       try {
-        const savedPeer = localStorage.getItem('synapse_active_peer');
+        const myEmail = (localStorage.getItem('synapse_user_email') || '').trim().toLowerCase();
+        const userScopedPeer = myEmail ? localStorage.getItem(`synapse_active_peer_${myEmail}`) : null;
+        const savedPeer = userScopedPeer || localStorage.getItem('synapse_active_peer');
         if (savedPeer) {
           const p = JSON.parse(savedPeer);
-          return {
-            id: p.id || 'peer-live',
-            name: p.name || 'Peer Partner',
-            initials: p.name ? p.name.split(' ').map((n: string) => n[0]).join('').slice(0, 2) : 'PP',
-            skill: p.domain || p.offers?.[0] || 'Peer Learning',
-            isReal: Boolean(p.isReal),
-            connectionId: p.connectionId,
-          };
+          if (p.id && !p.id.includes('peer-live') && p.name && !p.name.includes('Waiting for Peer')) {
+            return {
+              id: p.id,
+              name: p.name,
+              initials: p.name ? p.name.split(' ').map((n: string) => n[0]).join('').slice(0, 2) : 'PP',
+              skill: p.domain || p.offers?.[0] || 'Peer Learning',
+              isReal: Boolean(p.isReal),
+              isAiTutor: Boolean(p.isAiTutor || p.id === 'peer-ai-tutor'),
+              connectionId: p.connectionId,
+            };
+          }
         }
       } catch (e) {}
     }
@@ -151,9 +157,10 @@ export default function SessionsPage() {
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
     if (typeof window !== 'undefined') {
       try {
-        const myKey = (localStorage.getItem('synapse_user_email') || localStorage.getItem('synapse_user_name') || 'user').trim().toLowerCase();
+        const myKey = (localStorage.getItem('synapse_user_email') || '').trim().toLowerCase();
         let peerKey = '';
-        const savedPeer = localStorage.getItem('synapse_active_peer');
+        const userScopedPeer = myKey ? localStorage.getItem(`synapse_active_peer_${myKey}`) : null;
+        const savedPeer = userScopedPeer || localStorage.getItem('synapse_active_peer');
         if (savedPeer) {
           try {
             const p = JSON.parse(savedPeer);
@@ -162,7 +169,7 @@ export default function SessionsPage() {
             }
           } catch (e) {}
         }
-        if (peerKey) {
+        if (myKey && peerKey) {
           const pairKey = 'synapse_chat_pair_' + [myKey, peerKey].sort().join('__');
           const cached = localStorage.getItem(pairKey);
           if (cached) {
@@ -464,37 +471,52 @@ function useAsync(asyncFn) {
                     connectionId: matched.connectionId,
                   };
                 }
-                if (prev.id === 'peer-live' || prev.name.includes('Waiting') || !prev.isReal) {
-                  const chosen = friends[0];
-                  try {
-                    localStorage.setItem(
-                      'synapse_active_peer',
-                      JSON.stringify({
-                        id: chosen.friendEmail,
-                        name: chosen.friendName,
-                        domain: chosen.skillArea || currentTrack,
-                        isReal: true,
-                        connectionId: chosen.connectionId,
-                      })
-                    );
-                  } catch (e) {}
-                  return {
+                if (prev.isAiTutor) return prev;
+                const chosen = friends[0];
+                try {
+                  const saved = {
                     id: chosen.friendEmail,
                     name: chosen.friendName,
-                    initials: chosen.initials,
-                    skill: chosen.skillArea || currentTrack + ' Track',
+                    domain: chosen.skillArea || currentTrack,
                     isReal: true,
                     connectionId: chosen.connectionId,
                   };
-                }
-                return prev;
+                  localStorage.setItem('synapse_active_peer', JSON.stringify(saved));
+                  localStorage.setItem(`synapse_active_peer_${normMe}`, JSON.stringify(saved));
+                } catch (e) {}
+                return {
+                  id: chosen.friendEmail,
+                  name: chosen.friendName,
+                  initials: chosen.initials,
+                  skill: chosen.skillArea || currentTrack + ' Track',
+                  isReal: true,
+                  connectionId: chosen.connectionId,
+                };
               });
               setIsConnectionAccepted(true);
             } else {
+              const incomingList = Array.isArray(data.pendingIncoming) ? data.pendingIncoming : [];
               const outgoingList = Array.isArray(data.pendingOutgoing) ? data.pendingOutgoing : [];
-              if (outgoingList.length > 0) {
+
+              if (incomingList.length > 0) {
+                const pendingIn = incomingList[0];
+                setActivePeer((prev) => {
+                  if (prev.isAiTutor) return prev;
+                  const pName = pendingIn.requesterName || 'Peer';
+                  return {
+                    id: pendingIn.requesterId,
+                    name: `${pName} (Wants to Connect)`,
+                    initials: pName.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase(),
+                    skill: pendingIn.skillArea || currentTrack + ' Track',
+                    isReal: true,
+                    connectionId: pendingIn.id,
+                  };
+                });
+                setIsConnectionAccepted(false);
+              } else if (outgoingList.length > 0) {
                 const pendingOne = outgoingList[0];
                 setActivePeer((prev) => {
+                  if (prev.isAiTutor) return prev;
                   if (prev.id === 'peer-live' || prev.name.includes('Waiting')) {
                     const pName = pendingOne.recipientName || 'Peer';
                     return {
@@ -554,6 +576,13 @@ function useAsync(asyncFn) {
     };
   }, []);
 
+  // AI Tutor is always ready to learn immediately
+  useEffect(() => {
+    if (activePeer.isAiTutor || activePeer.id === 'peer-ai-tutor') {
+      setIsConnectionAccepted(true);
+    }
+  }, [activePeer.isAiTutor, activePeer.id]);
+
   // ─── Friend Switcher Handler ──────────────────────────────────
   const handleSelectFriend = (friend: FriendItem) => {
     setActivePeer({
@@ -606,7 +635,10 @@ function useAsync(asyncFn) {
   const prevThreadIdRef = useRef<string>('');
 
   const fetchThreadMessages = useCallback(async (tId: string) => {
-    if (!tId) return;
+    if (!tId || tId.includes('peer-live') || tId.includes('Waiting')) {
+      setMessages([]);
+      return;
+    }
 
     try {
       const res = await fetch('/api/messages?threadId=' + encodeURIComponent(tId) + '&limit=50');
@@ -637,14 +669,21 @@ function useAsync(asyncFn) {
   useEffect(() => {
     if (!currentThreadId) return;
 
+    const myKey = (studentEmail || studentName || 'user').trim().toLowerCase();
+    const peerKey = (activePeer.id || activePeer.name || 'peer').trim().toLowerCase();
+    const isWaiting = peerKey.includes('peer-live') || (activePeer.name || '').includes('Waiting');
+
+    if (isWaiting) {
+      setMessages([]);
+      return;
+    }
+
     // When thread changes, cleanly isolate and load that specific thread's cache
     if (prevThreadIdRef.current !== currentThreadId) {
       prevThreadIdRef.current = currentThreadId;
       if (typeof window !== 'undefined') {
-        const myKey = (studentEmail || studentName || 'user').trim().toLowerCase();
-        const peerKey = (activePeer.id || activePeer.name || 'peer').trim().toLowerCase();
         const pairKey = 'synapse_chat_pair_' + [myKey, peerKey].sort().join('__');
-        const cached = localStorage.getItem('synapse_chat_' + currentThreadId) || (peerKey && !peerKey.includes('peer-live') ? localStorage.getItem(pairKey) : null);
+        const cached = localStorage.getItem('synapse_chat_' + currentThreadId) || localStorage.getItem(pairKey);
         if (cached) {
           try {
             const parsed = JSON.parse(cached);
@@ -1368,9 +1407,9 @@ function useAsync(asyncFn) {
     // Check study assistant for confusion signals
     triggerStudyAssistantCheck([...messages, optimisticMsg]);
 
-    // AI peer response ONLY for explicit demo peers (never for real peers or while waiting)
-    const isDemoPeer = activePeer.id === 'peer-maya' || activePeer.id.includes('demo') || activePeer.name.includes('Demo Peer');
-    if (isDemoPeer) {
+    // AI peer response strictly for explicit AI Peer Tutor (never for real peers or while waiting)
+    const isAiTutor = activePeer.id === 'peer-ai-tutor' || activePeer.name.includes('AI Peer Tutor') || activePeer.id === 'peer-maya';
+    if (isAiTutor) {
       setIsPeerTyping(true);
       try {
         const res = await fetch('/api/peer-chat', {
@@ -2287,9 +2326,13 @@ function useAsync(asyncFn) {
                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-ok/15 text-ok font-bold border border-ok/30 flex items-center gap-1">
                   <span className="w-1.5 h-1.5 rounded-full bg-ok animate-pulse" /> LIVE PEER
                 </span>
+              ) : activePeer.isAiTutor || activePeer.id === 'peer-ai-tutor' ? (
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber/15 text-amber font-bold border border-amber/30 flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber animate-pulse" /> 🤖 AI PEER TUTOR
+                </span>
               ) : (
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber/15 text-amber font-semibold border border-amber/30">
-                  AI COLLABORATOR
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-muted/15 text-muted font-medium border border-border">
+                  WAITING FOR PEER
                 </span>
               )}
             </div>
