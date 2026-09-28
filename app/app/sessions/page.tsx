@@ -134,6 +134,16 @@ function useAsync(asyncFn) {
   const [postCallAnswer, setPostCallAnswer] = useState<number | null>(null);
   const [postCallSubmitted, setPostCallSubmitted] = useState(false);
 
+  // Live Call Signaling & Incoming Ringing
+  const [incomingCall, setIncomingCall] = useState<{
+    callerId: string;
+    callerName: string;
+    callUrl: string;
+    callMode: 'voice' | 'video';
+    messageId: string;
+  } | null>(null);
+  const dismissedCallIdsRef = useRef<Set<string>>(new Set());
+
   // ─── Part 5: AI Study Assistant (Tiers 1, 2, 3) ───────────────
   const [studyAssistantBanner, setStudyAssistantBanner] = useState<string | null>(null);
   const [tier1VoicePrompt, setTier1VoicePrompt] = useState<string | null>(null);
@@ -235,6 +245,17 @@ function useAsync(asyncFn) {
           setActivePeer({ id: 'peer-live', name: 'Waiting for Peer...', initials: '\u{1F465}', skill: 'Multi-Device Ready (' + currentTrack + ')', isReal: false });
         }
       }
+      // Check for incoming auto-join call from layout notification
+      const autoJoinCall = sessionStorage.getItem('synapse_auto_join_call');
+      if (autoJoinCall) {
+        sessionStorage.removeItem('synapse_auto_join_call');
+        const parsedCall = JSON.parse(autoJoinCall);
+        if (parsedCall.callUrl) {
+          setCallUrl(parsedCall.callUrl);
+          setCallMode(parsedCall.callMode || 'video');
+          setIsCallModalOpen(true);
+        }
+      }
     } catch (e) {}
 
     // Check connection status
@@ -315,9 +336,35 @@ function useAsync(asyncFn) {
         if (res.ok && isSubscribed) {
           const data = await res.json();
           if (Array.isArray(data.messages) && data.messages.length > 0) {
+            const myEmailLower = (studentEmail || '').trim().toLowerCase();
+
+            // Detect live incoming call invites from peer
+            const latestInvite = data.messages
+              .slice()
+              .reverse()
+              .find((m: any) => {
+                if (m.type !== 'call_invite' && !m.callUrl) return false;
+                const senderLower = (m.senderId || '').trim().toLowerCase();
+                if (myEmailLower && senderLower === myEmailLower) return false;
+                if (dismissedCallIdsRef.current.has(m.id)) return false;
+                if (m.createdAt && Date.now() - m.createdAt > 120000) return false;
+                return true;
+              });
+
+            if (latestInvite && !isCallModalOpen) {
+              setIncomingCall({
+                callerId: latestInvite.senderId,
+                callerName: latestInvite.senderName || activePeer.name || 'Peer Partner',
+                callUrl: latestInvite.callUrl,
+                callMode: latestInvite.callMode || 'video',
+                messageId: latestInvite.id,
+              });
+            } else if (!latestInvite && incomingCall) {
+              setIncomingCall(null);
+            }
+
             setMessages(prev => {
               const existingIds = new Set(prev.map(m => m.id));
-              const myEmailLower = (studentEmail || '').trim().toLowerCase();
 
               const newIncoming = data.messages
                 .filter((m: any) => {
@@ -366,7 +413,34 @@ function useAsync(asyncFn) {
 
     const interval = setInterval(pollMessages, 1500);
     return () => { isSubscribed = false; clearInterval(interval); };
-  }, [studentEmail, activePeer.name, scrollToBottom]);
+  }, [studentEmail, activePeer.name, isCallModalOpen, incomingCall, scrollToBottom]);
+
+  // ─── Incoming Call Audio Ring Chime ───────────────────────────
+  useEffect(() => {
+    if (!incomingCall) return;
+    const playChime = () => {
+      try {
+        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+        if (!AudioCtx) return;
+        const ctx = new AudioCtx();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(587.33, ctx.currentTime);
+        osc.frequency.setValueAtTime(880, ctx.currentTime + 0.15);
+        gain.gain.setValueAtTime(0.12, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.5);
+      } catch (e) {}
+    };
+
+    playChime();
+    const interval = setInterval(playChime, 3000);
+    return () => clearInterval(interval);
+  }, [incomingCall]);
 
   // Check agent activity logs
   const fetchActivityLogs = async () => {
@@ -759,7 +833,7 @@ function useAsync(asyncFn) {
 
       const data = await res.json();
       if (!res.ok || !data.success) {
-        showToast(data.error || 'Live calls are restricted to accepted connection peers.');
+        showToast(data.error || 'Live calls could not connect. Check network connection.');
         setIsCallModalOpen(false);
         setCallConnecting(false);
         return;
@@ -768,13 +842,28 @@ function useAsync(asyncFn) {
       setCallUrl(data.callUrl);
       setCallConnecting(false);
 
+      // Broadcast live call invite to the other peer so their device rings
+      fetch('/api/peer-network', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'call_invite',
+          sessionId: 'global_collab',
+          senderId: studentEmail || studentName,
+          senderName: studentName || 'Peer Partner',
+          callUrl: data.callUrl,
+          callMode: mode,
+          text: `📞 Started a live ${mode} call. Click Accept to join!`
+        })
+      }).catch(() => {});
+
       // 10s connection timeout check
       const timer = setTimeout(() => {
         setCallTimeout(true);
       }, 10000);
       return () => clearTimeout(timer);
     } catch (e: any) {
-      showToast('Call service error');
+      showToast('Call service error. Please try again.');
       setIsCallModalOpen(false);
       setCallConnecting(false);
     }
@@ -784,6 +873,34 @@ function useAsync(asyncFn) {
     setIsCallModalOpen(false);
     setCallUrl(null);
     setShowPostCallQuiz(true);
+
+    // Broadcast call end to network
+    fetch('/api/peer-network', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type: 'call_end',
+        sessionId: 'global_collab',
+        senderId: studentEmail || studentName,
+        senderName: studentName || 'Peer Partner',
+        text: 'Call ended'
+      })
+    }).catch(() => {});
+  };
+
+  const handleAcceptIncomingCall = () => {
+    if (!incomingCall) return;
+    setCallUrl(incomingCall.callUrl);
+    setCallMode(incomingCall.callMode);
+    setIsCallModalOpen(true);
+    setIncomingCall(null);
+    showToast(`Connected to live ${incomingCall.callMode} call with ${incomingCall.callerName}!`);
+  };
+
+  const handleDeclineIncomingCall = () => {
+    if (!incomingCall) return;
+    dismissedCallIdsRef.current.add(incomingCall.messageId);
+    setIncomingCall(null);
   };
 
   const handleSubmitPostCallQuiz = () => {
@@ -1055,6 +1172,43 @@ function useAsync(asyncFn) {
         </div>
       )}
 
+      {/* ─── Part 6: Live Incoming Call Notification Banner ──── */}
+      {incomingCall && (
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[250] max-w-lg w-[92%] bg-card border-2 border-amber rounded-2xl shadow-2xl p-4 animate-slide-down flex items-center justify-between gap-4 backdrop-blur-md">
+          <div className="flex items-center gap-3">
+            <div className="w-12 h-12 rounded-2xl bg-amber/20 text-amber flex items-center justify-center text-2xl animate-bounce shrink-0">
+              {incomingCall.callMode === 'voice' ? '📞' : '📹'}
+            </div>
+            <div>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-amber block">
+                Incoming Live {incomingCall.callMode === 'voice' ? 'Voice' : 'Video'} Call
+              </span>
+              <p className="font-serif font-bold text-sm text-ink truncate max-w-[180px] sm:max-w-xs">
+                {incomingCall.callerName} is calling you...
+              </p>
+              <span className="text-[11px] text-muted flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                Ringing live • Tap Accept to join
+              </span>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={handleAcceptIncomingCall}
+              className="py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow-md transition-all active:scale-95 flex items-center gap-1.5 cursor-pointer"
+            >
+              <span>📞</span> Accept
+            </button>
+            <button
+              onClick={handleDeclineIncomingCall}
+              className="py-2 px-3 bg-bad/10 hover:bg-bad/20 text-bad font-semibold text-xs rounded-xl border border-bad/30 transition-colors cursor-pointer"
+            >
+              Decline
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Session Header with peer info & Live Calling Buttons */}
       <div className="bg-card border border-border rounded-[22px] p-5 shadow-xs flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-3.5">
@@ -1085,16 +1239,14 @@ function useAsync(asyncFn) {
           {/* Live Call Triggers (Part 6) */}
           <button
             onClick={() => handleStartCall('voice')}
-            disabled={!isConnectionAccepted}
-            className="text-xs px-3 py-1.5 bg-card-alt border border-border hover:border-amber text-ink font-semibold rounded-xl flex items-center gap-1.5 transition-colors disabled:opacity-50 cursor-pointer"
+            className="text-xs px-3 py-1.5 bg-card-alt border border-border hover:border-amber text-ink font-semibold rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs"
             title="Start Live Voice Call"
           >
             <span>📞</span> Voice Call
           </button>
           <button
             onClick={() => handleStartCall('video')}
-            disabled={!isConnectionAccepted}
-            className="text-xs px-3 py-1.5 bg-amber hover:bg-terracotta text-white font-semibold rounded-xl flex items-center gap-1.5 transition-colors disabled:opacity-50 cursor-pointer shadow-xs"
+            className="text-xs px-3 py-1.5 bg-amber hover:bg-terracotta text-white font-semibold rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs"
             title="Start Live Video Call"
           >
             <span>📹</span> Video Call
@@ -1530,21 +1682,24 @@ function useAsync(asyncFn) {
 
       {/* ─── Part 6: Live Call Modal ─────────────────────────────── */}
       {isCallModalOpen && (
-        <div className="fixed inset-0 z-[120] bg-ink/70 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
+        <div className="fixed inset-0 z-[120] bg-ink/75 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in">
           <div className="bg-card border border-border rounded-[24px] max-w-2xl w-full p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-border">
               <div className="flex items-center gap-3">
-                <span className="text-2xl">{callMode === 'voice' ? '📞' : '📹'}</span>
+                <span className="text-2xl animate-pulse">{callMode === 'voice' ? '📞' : '📹'}</span>
                 <div>
-                  <h3 className="font-serif font-bold text-ink">
+                  <h3 className="font-serif font-bold text-ink text-base">
                     Live {callMode === 'voice' ? 'Voice Call' : 'Video Call'} with {activePeer.name}
                   </h3>
-                  <p className="text-xs text-muted">WebRTC Encrypted Peer Session</p>
+                  <p className="text-xs text-emerald-600 font-medium flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
+                    WebRTC Encrypted Room • Ringing on peer's screen
+                  </p>
                 </div>
               </div>
               <button
                 onClick={handleEndCall}
-                className="text-xs px-3 py-1.5 bg-bad/15 text-bad border border-bad/30 rounded-xl hover:bg-bad/25 cursor-pointer font-bold"
+                className="text-xs px-3.5 py-1.5 bg-bad/15 text-bad border border-bad/30 rounded-xl hover:bg-bad/25 cursor-pointer font-bold transition-colors"
               >
                 End Call
               </button>
@@ -1554,12 +1709,12 @@ function useAsync(asyncFn) {
             {callTimeout && (
               <div className="p-3 bg-amber/15 border border-amber/30 rounded-xl text-xs text-ink flex items-center gap-2">
                 <span>⚠️</span>
-                <span>Connection taking over 10 seconds. You can continue waiting or use live voice/text chat.</span>
+                <span>Connecting is taking a few moments. If the peer is ready, you can also open the call in a separate window below.</span>
               </div>
             )}
 
             {/* Call Screen / Frame */}
-            <div className="h-[400px] bg-ink/90 rounded-2xl flex flex-col items-center justify-center text-white relative overflow-hidden">
+            <div className="h-[420px] bg-ink/95 rounded-2xl flex flex-col items-center justify-center text-white relative overflow-hidden shadow-inner">
               {callUrl ? (
                 <iframe
                   src={callUrl}
@@ -1568,12 +1723,12 @@ function useAsync(asyncFn) {
                   title="Synapse Live WebRTC Call"
                 />
               ) : (
-                <div className="text-center space-y-3">
-                  <div className="w-16 h-16 rounded-full bg-amber/30 text-amber flex items-center justify-center text-2xl mx-auto animate-pulse">
+                <div className="text-center space-y-3 p-6">
+                  <div className="w-16 h-16 rounded-full bg-amber/20 text-amber flex items-center justify-center text-2xl mx-auto animate-bounce">
                     {callMode === 'voice' ? '📞' : '📹'}
                   </div>
-                  <p className="text-sm font-medium">Connecting to {activePeer.name}...</p>
-                  <p className="text-xs text-zinc-400">Microphone {callMode === 'video' ? 'and camera enabled' : 'active (camera off)'}</p>
+                  <p className="text-sm font-semibold">Initiating call to {activePeer.name}...</p>
+                  <p className="text-xs text-zinc-400">Microphone {callMode === 'video' ? 'and camera active' : 'active (camera off)'}</p>
                 </div>
               )}
             </div>
@@ -1581,22 +1736,22 @@ function useAsync(asyncFn) {
             <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
               <div className="flex items-center gap-3">
                 <span className="text-xs text-muted">
-                  {callMode === 'voice' ? 'Audio active (camera muted by default)' : 'Video & Audio encrypted'}
+                  {callMode === 'voice' ? '🎙️ Audio active' : '📹 Video & audio live'}
                 </span>
                 {callUrl && (
                   <a
                     href={callUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-xs px-2.5 py-1 bg-card-alt border border-border text-amber hover:underline rounded-lg font-medium flex items-center gap-1"
+                    className="text-xs px-3 py-1.5 bg-amber/15 border border-amber/30 text-amber hover:bg-amber/25 rounded-xl font-bold flex items-center gap-1.5 transition-colors"
                   >
-                    <span>↗</span> Open in New Window
+                    <span>↗</span> Open Full Screen
                   </a>
                 )}
               </div>
               <button
                 onClick={handleEndCall}
-                className="py-2.5 px-6 bg-bad hover:bg-red-700 text-white font-bold text-xs rounded-xl shadow-xs cursor-pointer"
+                className="py-2.5 px-6 bg-bad hover:bg-red-700 text-white font-bold text-xs rounded-xl shadow-xs transition-colors cursor-pointer"
               >
                 Leave &amp; End Call
               </button>

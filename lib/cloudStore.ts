@@ -78,12 +78,16 @@ export interface CloudMessage {
   senderRole: 'peer' | 'me';
   text: string;
   timestamp: string;
-  // Part D + H enhancements
-  type?: 'text' | 'voice' | 'ai_rephrase' | 'ai_fallback' | 'system';
+  // Part D + H enhancements & Part 6 live calling
+  type?: 'text' | 'voice' | 'ai_rephrase' | 'ai_fallback' | 'system' | 'call_invite' | 'call_end';
+  callUrl?: string;
+  callMode?: 'voice' | 'video';
+  callStatus?: 'ringing' | 'accepted' | 'declined' | 'ended';
   voiceDataUrl?: string;
   reactions?: string[];
   flagged?: boolean;
   replyToId?: string;
+  createdAt?: number;
 }
 
 // Part A — Skill verification replaces self-declared levels
@@ -449,7 +453,7 @@ export function updatePeerHeartbeat(peer: Partial<CloudPeer> & { email: string; 
 export function getMessages(sessionId = 'global_collab', limit = 100): CloudMessage[] {
   const store = loadStore();
   return store.messages
-    .filter((m) => m.sessionId === sessionId || m.sessionId === 'global_collab')
+    .filter((m) => sessionId === 'global_collab' || m.sessionId === 'global_collab' || m.sessionId === sessionId)
     .slice(-limit);
 }
 
@@ -459,6 +463,12 @@ export function addMessage(msg: {
   senderName: string;
   senderRole?: 'peer' | 'me';
   text: string;
+  type?: any;
+  callUrl?: string;
+  callMode?: 'voice' | 'video';
+  callStatus?: 'ringing' | 'accepted' | 'declined' | 'ended';
+  voiceDataUrl?: string;
+  replyToId?: string;
 }): CloudMessage {
   const store = loadStore();
   const newMsg: CloudMessage = {
@@ -469,6 +479,13 @@ export function addMessage(msg: {
     senderRole: msg.senderRole || 'peer',
     text: msg.text,
     timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    type: msg.type || 'text',
+    callUrl: msg.callUrl,
+    callMode: msg.callMode,
+    callStatus: msg.callStatus,
+    voiceDataUrl: msg.voiceDataUrl,
+    replyToId: msg.replyToId,
+    createdAt: Date.now(),
   };
 
   store.messages.push(newMsg);

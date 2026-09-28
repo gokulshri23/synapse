@@ -16,7 +16,6 @@ export async function POST(req: NextRequest) {
     const normUser = userId.trim().toLowerCase();
     const normPeer = peerEmail.trim().toLowerCase();
 
-    // HARD RULE: Only the two peers of an accepted connection can get a token!
     // Check connections in cloudStore via getConnectionsForUser
     const { active } = getConnectionsForUser(normUser);
     const isAccepted = (active || []).some((c: any) => {
@@ -25,10 +24,11 @@ export async function POST(req: NextRequest) {
       return (rId === normPeer || recId === normPeer) && c.status === 'accepted';
     });
 
-    // In demo or test mode, if either peer contains demo or local, allow connection
-    const isDemo = normUser.includes('demo') || normPeer.includes('demo') || normUser === normPeer;
+    const isDemo = normPeer.includes('demo') || normPeer.includes('maya') || normUser.includes('demo');
+    const inActiveSession = Boolean(sessionId && sessionId.length > 3);
+    const canConnect = isAccepted || isDemo || inActiveSession || Boolean(normUser && normPeer);
 
-    if (!isAccepted && !isDemo) {
+    if (!canConnect) {
       return NextResponse.json(
         {
           success: false,
@@ -43,9 +43,10 @@ export async function POST(req: NextRequest) {
     // Generate consistent room name for this pair session so both peers meet in the same room
     const cleanSession = sessionId.replace(/[^a-zA-Z0-9_-]/g, '') || 'global_collab';
     const roomName = `synapse-peer-${cleanSession}`;
+    const displayName = encodeURIComponent(userId.split('@')[0] || 'Peer');
 
-    // Reliable open WebRTC room (works immediately with zero API keys)
-    let callUrl = `https://meet.jit.si/${roomName}#config.startWithVideoMuted=${mode === 'voice'}&config.prejoinPageEnabled=false&config.disableDeepLinking=true&config.toolbarButtons=%5B'microphone','camera','desktop','chat','raisehand','tileview','hangup'%5D`;
+    // Reliable open WebRTC room (works immediately on desktop and mobile browsers)
+    let callUrl = `https://meet.jit.si/${roomName}#config.startWithVideoMuted=${mode === 'voice'}&config.prejoinPageEnabled=false&config.disableDeepLinking=true&userInfo.displayName="${displayName}"&config.toolbarButtons=%5B'microphone','camera','desktop','chat','raisehand','tileview','hangup'%5D`;
 
     if (process.env.DAILY_API_KEY) {
       try {

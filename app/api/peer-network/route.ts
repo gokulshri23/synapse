@@ -30,9 +30,15 @@ export async function POST(req: Request) {
   try {
     const body = await req.json();
 
-    // Case 1: Posting a message
-    if (body.type === 'message') {
-      if (!body.text || !body.text.trim()) {
+    // Case 1: Posting a message or call event
+    if (body.type === 'message' || body.type === 'call_invite' || body.type === 'call_end') {
+      const isCallInvite = body.type === 'call_invite';
+      const defaultText = isCallInvite
+        ? `📞 Started a live ${body.callMode || 'video'} call. Click Accept to join!`
+        : body.type === 'call_end' ? 'Call ended' : '';
+
+      const text = (body.text || defaultText).trim();
+      if (!text && !isCallInvite) {
         return NextResponse.json({ error: 'Message text required' }, { status: 400 });
       }
 
@@ -41,7 +47,12 @@ export async function POST(req: Request) {
         senderId: body.senderId || 'anon',
         senderName: body.senderName || 'Peer Learner',
         senderRole: 'peer',
-        text: body.text.trim(),
+        text: text || 'Live Call',
+        type: body.type,
+        callUrl: body.callUrl,
+        callMode: body.callMode || body.mode,
+        callStatus: body.callStatus || (isCallInvite ? 'ringing' : 'ended'),
+        voiceDataUrl: body.voiceDataUrl,
       });
 
       return NextResponse.json({ success: true, message: msg });

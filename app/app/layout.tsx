@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { usePathname, useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -9,6 +9,8 @@ import ThemeToggle from '@/components/ui/ThemeToggle';
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const [profile, setProfile] = useState<any>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [globalIncomingCall, setGlobalIncomingCall] = useState<any>(null);
+  const dismissedCallIdsRef = useRef<Set<string>>(new Set());
   const pathname = usePathname();
   const router = useRouter();
   const supabase = createClient();
@@ -100,6 +102,64 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     router.push('/login');
   };
 
+  // Listen for incoming live calls across all dashboard views
+  useEffect(() => {
+    if (pathname === '/app/sessions') {
+      setGlobalIncomingCall(null);
+      return;
+    }
+
+    const checkIncomingCalls = async () => {
+      try {
+        const res = await fetch('/api/peer-network?sessionId=global_collab');
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data.messages) && data.messages.length > 0) {
+            const myEmailLower = (profile?.email || '').trim().toLowerCase();
+            const invite = data.messages
+              .slice()
+              .reverse()
+              .find((m: any) => {
+                if (m.type !== 'call_invite' && !m.callUrl) return false;
+                const senderLower = (m.senderId || '').trim().toLowerCase();
+                if (myEmailLower && senderLower === myEmailLower) return false;
+                if (dismissedCallIdsRef.current.has(m.id)) return false;
+                if (m.createdAt && Date.now() - m.createdAt > 120000) return false;
+                return true;
+              });
+
+            if (invite) {
+              setGlobalIncomingCall({
+                id: invite.id,
+                callerName: invite.senderName || 'Peer Partner',
+                callUrl: invite.callUrl,
+                callMode: invite.callMode || 'video',
+              });
+            } else {
+              setGlobalIncomingCall(null);
+            }
+          }
+        }
+      } catch (e) {}
+    };
+
+    const interval = setInterval(checkIncomingCalls, 3000);
+    return () => clearInterval(interval);
+  }, [pathname, profile?.email]);
+
+  const handleAcceptGlobalCall = () => {
+    if (!globalIncomingCall) return;
+    sessionStorage.setItem('synapse_auto_join_call', JSON.stringify(globalIncomingCall));
+    setGlobalIncomingCall(null);
+    router.push('/app/sessions');
+  };
+
+  const handleDeclineGlobalCall = () => {
+    if (!globalIncomingCall) return;
+    dismissedCallIdsRef.current.add(globalIncomingCall.id);
+    setGlobalIncomingCall(null);
+  };
+
   const tabs = [
     { name: 'Skills', path: '/app/skills', icon: '📊' },
     { name: 'Match', path: '/app/match', icon: '🤝' },
@@ -110,6 +170,42 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-screen bg-canvas flex flex-col text-ink font-sans">
+      {/* Global Incoming Live Call Notification */}
+      {globalIncomingCall && pathname !== '/app/sessions' && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[250] max-w-lg w-[92%] bg-card border-2 border-amber rounded-2xl shadow-2xl p-4 animate-slide-down flex items-center justify-between gap-4 backdrop-blur-md">
+          <div className="flex items-center gap-3">
+            <div className="w-12 h-12 rounded-2xl bg-amber/20 text-amber flex items-center justify-center text-2xl animate-bounce shrink-0">
+              {globalIncomingCall.callMode === 'voice' ? '📞' : '📹'}
+            </div>
+            <div>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-amber block">
+                Incoming Live {globalIncomingCall.callMode === 'voice' ? 'Voice' : 'Video'} Call
+              </span>
+              <p className="font-serif font-bold text-sm text-ink truncate max-w-[180px] sm:max-w-xs">
+                {globalIncomingCall.callerName} is calling you...
+              </p>
+              <span className="text-[11px] text-muted flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                Ringing live • Tap Accept to join
+              </span>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={handleAcceptGlobalCall}
+              className="py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow-md transition-all active:scale-95 flex items-center gap-1.5 cursor-pointer"
+            >
+              <span>📞</span> Accept
+            </button>
+            <button
+              onClick={handleDeclineGlobalCall}
+              className="py-2 px-3 bg-bad/10 hover:bg-bad/20 text-bad font-semibold text-xs rounded-xl border border-bad/30 transition-colors cursor-pointer"
+            >
+              Decline
+            </button>
+          </div>
+        </div>
+      )}
       {/* Top Header */}
       <header className="bg-card border-b border-border sticky top-0 z-30 shadow-xs">
         <div className="max-w-[1200px] mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
