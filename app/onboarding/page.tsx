@@ -85,6 +85,7 @@ export default function OnboardingPage() {
   const [isPromptLoading, setIsPromptLoading] = useState(false);
   const [isEvaluatingTeaching, setIsEvaluatingTeaching] = useState(false);
   const [teachingEvaluation, setTeachingEvaluation] = useState<any>(null);
+  const [evaluationStage, setEvaluationStage] = useState<'idle' | 'evaluating' | 'completed' | 'failed'>('idle');
 
   // Audio Recording for Teaching Verification
   const [isRecording, setIsRecording] = useState(false);
@@ -93,6 +94,10 @@ export default function OnboardingPage() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const recordTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const audioBase64Ref = useRef<string>('');
+  const audioMimeTypeRef = useRef<string>('audio/webm');
+  const clientTranscriptRef = useRef<string>('');
+  const speechRecognitionRef = useRef<any>(null);
 
   // Final Summary state
   const [isFinishing, setIsFinishing] = useState(false);
@@ -379,29 +384,62 @@ export default function OnboardingPage() {
           break;
         }
       }
+      audioMimeTypeRef.current = selectedMime || 'audio/webm';
       const mediaRecorder = new MediaRecorder(stream, selectedMime ? { mimeType: selectedMime } : undefined);
       mediaRecorderRef.current = mediaRecorder;
       audioChunksRef.current = [];
+      audioBase64Ref.current = '';
+      clientTranscriptRef.current = '';
+
+      // Initialize Web Speech API speech recognition in parallel if supported
+      try {
+        const SpeechRec = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+        if (SpeechRec) {
+          const recognition = new SpeechRec();
+          recognition.continuous = true;
+          recognition.interimResults = true;
+          recognition.lang = 'en-US';
+          recognition.onresult = (event: any) => {
+            let finalStr = '';
+            for (let i = 0; i < event.results.length; ++i) {
+              finalStr += event.results[i][0].transcript + ' ';
+            }
+            clientTranscriptRef.current = finalStr.trim();
+          };
+          recognition.start();
+          speechRecognitionRef.current = recognition;
+        }
+      } catch (recErr) {
+        console.warn('Web speech recognition not available:', recErr);
+      }
 
       mediaRecorder.ondataavailable = (e) => {
         if (e.data.size > 0) audioChunksRef.current.push(e.data);
       };
 
       mediaRecorder.onstop = () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: selectedMime || 'audio/webm' });
+        const audioBlob = new Blob(audioChunksRef.current, { type: audioMimeTypeRef.current });
         stream.getTracks().forEach((track) => track.stop());
         const url = URL.createObjectURL(audioBlob);
         setAudioUrl(url);
+
+        // Convert audioBlob to base64 for server evaluation
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const base64data = reader.result as string;
+          audioBase64Ref.current = base64data;
+        };
+        reader.readAsDataURL(audioBlob);
       };
 
-      mediaRecorder.start();
+      mediaRecorder.start(250);
       setIsRecording(true);
       setRecordSeconds(0);
       recordTimerRef.current = setInterval(() => {
         setRecordSeconds((prev) => prev + 1);
       }, 1000);
     } catch (err) {
-      alert('Could not access microphone. You can still submit your written explanation.');
+      alert('Could not access microphone. Please check browser microphone permissions.');
     }
   };
 
@@ -410,17 +448,23 @@ export default function OnboardingPage() {
       mediaRecorderRef.current.stop();
       setIsRecording(false);
       if (recordTimerRef.current) clearInterval(recordTimerRef.current);
+      if (speechRecognitionRef.current) {
+        try {
+          speechRecognitionRef.current.stop();
+        } catch (e) {}
+      }
     }
   };
 
   // Submit Quiz 2: Teaching Pedagogy Evaluation
   const submitTeachingAudition = async () => {
-    if (!writtenExplanation.trim() && !audioUrl) {
+    if (!writtenExplanation.trim() && !audioUrl && !audioBase64Ref.current) {
       alert('Please provide your teaching explanation before submitting.');
       return;
     }
 
     setIsEvaluatingTeaching(true);
+    setEvaluationStage('evaluating');
     try {
       const teachSkill = (teachingSkills.length > 0 ? teachingSkills[0] : null) || (learningSkill === 'React' ? 'Python' : 'React');
       const res = await fetch('/api/teaching-challenge', {
@@ -428,38 +472,43 @@ export default function OnboardingPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action: 'evaluate',
+          userId: normalizedEmail,
           skill: teachSkill,
-          explanation: writtenExplanation,
-          hasAudio: Boolean(audioUrl),
+          question: teachingPrompt,
+          writtenExplanation: writtenExplanation.trim(),
+          audioData: audioBase64Ref.current,
+          mimeType: audioMimeTypeRef.current,
+          clientTranscript: clientTranscriptRef.current,
         })
       });
       const data = await res.json();
+      if (!data.success && data.error) {
+        throw new Error(data.error);
+      }
       setTeachingEvaluation(data.result);
 
-      // Register verified teaching skill in database
-      await fetch('/api/skill-declarations', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'create',
-          userId: normalizedEmail,
-          skill: teachSkill,
-          intent: 'teach'
-        })
-      });
-    } catch (e) {
-      setTeachingEvaluation({
-        accuracy: 85,
-        clarity: 82,
-        beginnerFriendliness: 88,
-        average: 85,
-        feedback: 'Solid, patient breakdown with good structure and clear analogy.',
-        assignedLevel: 4,
-        passed: true,
-      });
+      if (data.result?.passed) {
+        setEvaluationStage('completed');
+        // Register verified teaching skill in database
+        await fetch('/api/skill-declarations', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'create',
+            userId: normalizedEmail,
+            skill: teachSkill,
+            intent: 'teach'
+          })
+        });
+        setStep(4); // Advance to Summary
+      } else {
+        setEvaluationStage('failed');
+      }
+    } catch (e: any) {
+      alert(e.message || 'Evaluation error. Please try again.');
+      setEvaluationStage('idle');
     } finally {
       setIsEvaluatingTeaching(false);
-      setStep(4); // Advance to Summary
     }
   };
 
@@ -469,9 +518,11 @@ export default function OnboardingPage() {
     const finalDays = isCustomDays ? parseInt(customDays || '30', 10) : studyDays;
     const goalText = `${finalDays}-Day Study Sprint in ${learningSkill}`;
 
-    const effectiveTeach = teachingSkills.length > 0
-      ? teachingSkills
-      : [learningSkill === 'React' ? 'Python' : 'React', 'Problem Solving'];
+    // Only assign teaching privileges if verification genuinely passed
+    const isTeachingVerified = Boolean(teachingEvaluation?.passed);
+    const verifiedTeachSkill = (teachingSkills.length > 0 ? teachingSkills[0] : null) || (learningSkill === 'React' ? 'Python' : 'React');
+    const effectiveTeach = isTeachingVerified ? [verifiedTeachSkill] : [];
+    const verifiedLevel = isTeachingVerified ? (teachingEvaluation?.proficiencyLevel || 3) : 0;
     const effectiveSeek = [learningSkill];
 
     const studyData = {
@@ -487,7 +538,7 @@ export default function OnboardingPage() {
       canTeach: effectiveTeach,
       seekingGuidance: effectiveSeek,
       onboarding_complete: true,
-      verified_level: teachingEvaluation?.assignedLevel ?? 3,
+      verified_level: verifiedLevel,
     };
 
     localStorage.setItem('synapse_study_data', JSON.stringify(studyData));
@@ -516,17 +567,19 @@ export default function OnboardingPage() {
         }),
       });
 
-      for (const tSkill of effectiveTeach) {
-        await fetch('/api/skill-declarations', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: 'create',
-            userId: normalizedEmail,
-            skill: tSkill,
-            intent: 'teach',
-          }),
-        });
+      if (isTeachingVerified) {
+        for (const tSkill of effectiveTeach) {
+          await fetch('/api/skill-declarations', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'create',
+              userId: normalizedEmail,
+              skill: tSkill,
+              intent: 'teach',
+            }),
+          });
+        }
       }
     } catch (e) {}
 
@@ -992,81 +1045,153 @@ export default function OnboardingPage() {
                     </span>
                   </div>
 
-                  {/* Teaching Challenge Prompt */}
-                  <div className="p-4 bg-card-alt rounded-2xl border border-border space-y-2">
-                    <span className="text-[10px] uppercase font-bold text-muted tracking-wider block">Pedagogical Challenge</span>
-                    <p className="text-xs sm:text-sm font-medium text-ink leading-relaxed">
-                      {teachingPrompt || `Explain the core principles of ${teachingSkills[0] || learningSkill} to a peer who is struggling. Use an intuitive analogy and a short code example.`}
-                    </p>
-                  </div>
-
-                  {/* Written Teaching Explanation */}
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-bold uppercase tracking-wider text-muted flex items-center justify-between">
-                      <span>1. Written Explanation</span>
-                      <span className="text-[11px] text-muted">{writtenExplanation.length} characters</span>
-                    </label>
-                    <textarea
-                      rows={5}
-                      value={writtenExplanation}
-                      onChange={(e) => setWrittenExplanation(e.target.value)}
-                      placeholder="Type your explanation as if speaking to a curious beginner. Include an everyday analogy and clear step-by-step logic..."
-                      className="w-full p-3.5 rounded-xl bg-card-alt border border-border text-ink text-xs sm:text-sm outline-none focus:border-amber leading-relaxed resize-none"
-                    />
-                  </div>
-
-                  {/* Audio Speech Verification (Microphone Recording) */}
-                  <div className="p-4 bg-card-alt rounded-2xl border border-border space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <span className="text-xs font-bold text-ink block">2. Spoken Voice Demonstration</span>
-                        <span className="text-[11px] text-muted">
-                          Record a 15–45 second voice explanation to analyze your teaching tone &amp; verbal clarity.
+                  {/* Teaching Failure / Feedback Card (If attempt failed) */}
+                  {teachingEvaluation && !teachingEvaluation.passed && (
+                    <div className="p-4 bg-bad/10 border border-bad/30 rounded-2xl space-y-3 animate-fade-in">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold uppercase tracking-wider text-bad flex items-center gap-1.5">
+                          <span>⚠️</span> Assessment Incomplete — Below Teaching Threshold
+                        </span>
+                        <span className="text-xs px-2.5 py-0.5 bg-bad/20 text-bad font-bold rounded-lg">
+                          Score: {teachingEvaluation.combinedScore}% (60% Required)
                         </span>
                       </div>
-                      {audioUrl && (
-                        <span className="text-xs px-2 py-0.5 bg-ok/15 text-ok font-bold rounded-md">
-                          Voice Captured ✓
-                        </span>
-                      )}
-                    </div>
 
-                    <div className="flex flex-wrap items-center gap-3 pt-1">
+                      <div className="grid grid-cols-2 gap-2 text-xs">
+                        <div className="p-2.5 bg-card rounded-xl border border-border">
+                          <span className="text-muted block text-[10px] uppercase font-bold">Written Task (50%)</span>
+                          <span className="font-bold text-ink text-sm">{teachingEvaluation.writtenScore}%</span>
+                        </div>
+                        <div className="p-2.5 bg-card rounded-xl border border-border">
+                          <span className="text-muted block text-[10px] uppercase font-bold">Voice Task (50%)</span>
+                          <span className="font-bold text-ink text-sm">{teachingEvaluation.voiceScore}%</span>
+                        </div>
+                      </div>
+
+                      <p className="text-xs text-ink/80 leading-relaxed">
+                        {teachingEvaluation.feedback}
+                      </p>
+
+                      {teachingEvaluation.knowledgeGaps && teachingEvaluation.knowledgeGaps.length > 0 && (
+                        <div className="space-y-1">
+                          <span className="text-[10px] uppercase font-bold text-muted tracking-wider block">Areas to Reinforce:</span>
+                          <ul className="text-xs text-muted list-disc list-inside space-y-0.5">
+                            {teachingEvaluation.knowledgeGaps.map((gap: string, idx: number) => (
+                              <li key={idx}>{gap}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      <div className="flex flex-col sm:flex-row gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setTeachingEvaluation(null);
+                            setEvaluationStage('idle');
+                            setWrittenExplanation('');
+                            setAudioUrl(null);
+                            audioBase64Ref.current = '';
+                            clientTranscriptRef.current = '';
+                            loadTeachingPrompt(teachingSkills[0] || (learningSkill === 'React' ? 'Python' : 'React'));
+                          }}
+                          className="flex-1 py-2.5 px-3 bg-card border border-border hover:border-amber text-ink font-bold text-xs rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                        >
+                          <span>🔄</span>
+                          <span>Retake Teaching Assessment</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setStep(4);
+                          }}
+                          className="flex-1 py-2.5 px-3 bg-amber hover:bg-terracotta text-white font-bold text-xs rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                        >
+                          <span>Continue as Learner →</span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Teaching Challenge Prompt */}
+                  {(!teachingEvaluation || teachingEvaluation.passed) && (
+                    <>
+                      <div className="p-4 bg-card-alt rounded-2xl border border-border space-y-2">
+                        <span className="text-[10px] uppercase font-bold text-muted tracking-wider block">Pedagogical Challenge</span>
+                        <p className="text-xs sm:text-sm font-medium text-ink leading-relaxed">
+                          {teachingPrompt || `Explain the core principles of ${teachingSkills[0] || learningSkill} to a peer who is struggling. Use an intuitive analogy and a short code example.`}
+                        </p>
+                      </div>
+
+                      {/* Written Teaching Explanation */}
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-bold uppercase tracking-wider text-muted flex items-center justify-between">
+                          <span>1. Written Explanation</span>
+                          <span className="text-[11px] text-muted">{writtenExplanation.length} characters</span>
+                        </label>
+                        <textarea
+                          rows={5}
+                          value={writtenExplanation}
+                          onChange={(e) => setWrittenExplanation(e.target.value)}
+                          placeholder="Type your explanation as if speaking to a curious beginner. Include an everyday analogy and clear step-by-step logic..."
+                          className="w-full p-3.5 rounded-xl bg-card-alt border border-border text-ink text-xs sm:text-sm outline-none focus:border-amber leading-relaxed resize-none"
+                        />
+                      </div>
+
+                      {/* Audio Speech Verification (Microphone Recording) */}
+                      <div className="p-4 bg-card-alt rounded-2xl border border-border space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <span className="text-xs font-bold text-ink block">2. Spoken Voice Demonstration</span>
+                            <span className="text-[11px] text-muted">
+                              Record a 15–45 second voice explanation to analyze your teaching tone &amp; verbal clarity.
+                            </span>
+                          </div>
+                          {audioUrl && (
+                            <span className="text-xs px-2 py-0.5 bg-ok/15 text-ok font-bold rounded-md">
+                              Voice Captured ✓
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-3 pt-1">
+                          <button
+                            type="button"
+                            onClick={isRecording ? stopRecording : startRecording}
+                            className={`px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 cursor-pointer transition-all ${
+                              isRecording
+                                ? 'bg-bad text-white animate-pulse'
+                                : 'bg-card border border-border hover:border-amber text-ink'
+                            }`}
+                          >
+                            <span>{isRecording ? '⏹️' : '🎙️'}</span>
+                            <span>{isRecording ? `Recording... (${recordSeconds}s) - Click to Stop` : 'Record Audio Explanation'}</span>
+                          </button>
+
+                          {audioUrl && (
+                            <audio controls src={audioUrl} className="h-8 max-w-[240px]" preload="metadata" />
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Submit Teaching Audition */}
                       <button
                         type="button"
-                        onClick={isRecording ? stopRecording : startRecording}
-                        className={`px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 cursor-pointer transition-all ${
-                          isRecording
-                            ? 'bg-bad text-white animate-pulse'
-                            : 'bg-card border border-border hover:border-amber text-ink'
-                        }`}
+                        onClick={submitTeachingAudition}
+                        disabled={isEvaluatingTeaching || (!writtenExplanation.trim() && !audioUrl)}
+                        className="w-full py-3.5 bg-amber hover:bg-terracotta text-white font-bold text-sm rounded-xl shadow-xs transition-all disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
                       >
-                        <span>{isRecording ? '⏹️' : '🎙️'}</span>
-                        <span>{isRecording ? `Recording... (${recordSeconds}s) - Click to Stop` : 'Record Audio Explanation'}</span>
+                        {isEvaluatingTeaching ? (
+                          <>
+                            <div className="w-4 h-4 border-2 border-white/50 border-t-white rounded-full animate-spin" />
+                            <span>AI Analyzing Written Analogy, Spoken Clarity &amp; Accuracy (50/50)...</span>
+                          </>
+                        ) : (
+                          <span>Submit Teaching Audition &amp; Review Results →</span>
+                        )}
                       </button>
-
-                      {audioUrl && (
-                        <audio controls src={audioUrl} className="h-8 max-w-[240px]" preload="metadata" />
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Submit Teaching Audition */}
-                  <button
-                    type="button"
-                    onClick={submitTeachingAudition}
-                    disabled={isEvaluatingTeaching || (!writtenExplanation.trim() && !audioUrl)}
-                    className="w-full py-3.5 bg-amber hover:bg-terracotta text-white font-bold text-sm rounded-xl shadow-xs transition-all disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
-                  >
-                    {isEvaluatingTeaching ? (
-                      <>
-                        <div className="w-4 h-4 border-2 border-white/50 border-t-white rounded-full animate-spin" />
-                        <span>AI Analyzing Teaching Tone, Analogy &amp; Accuracy...</span>
-                      </>
-                    ) : (
-                      <span>Submit Teaching Audition &amp; Review Results →</span>
-                    )}
-                  </button>
+                    </>
+                  )}
                 </div>
               )}
             </div>
@@ -1100,15 +1225,27 @@ export default function OnboardingPage() {
 
                 {/* Teaching Verification Result */}
                 <div className="p-4 bg-card-alt rounded-2xl border border-border space-y-1.5">
-                  <span className="text-[10px] uppercase font-bold text-ok tracking-wider block">Teaching Credential</span>
+                  <span className={`text-[10px] uppercase font-bold tracking-wider block ${teachingEvaluation?.passed ? 'text-ok' : 'text-amber'}`}>
+                    {teachingEvaluation?.passed ? 'Teaching Credential' : 'Teaching Eligibility Status'}
+                  </span>
                   <div className="flex items-center justify-between">
-                    <span className="text-sm font-bold text-ink">{teachingSkills[0] || learningSkill}</span>
-                    <span className="text-xs px-2 py-0.5 bg-ok/15 text-ok font-bold rounded-lg">
-                      {teachingEvaluation?.assignedLevel >= 4 ? 'Verified Mentor (L4)' : 'Verified Peer Helper (L3)'}
+                    <span className="text-sm font-bold text-ink">{(teachingSkills.length > 0 ? teachingSkills[0] : null) || learningSkill}</span>
+                    <span className={`text-xs px-2 py-0.5 font-bold rounded-lg ${
+                      teachingEvaluation?.passed
+                        ? 'bg-ok/15 text-ok'
+                        : 'bg-amber/15 text-amber'
+                    }`}>
+                      {teachingEvaluation?.passed
+                        ? (teachingEvaluation.proficiencyLevel >= 4 ? 'Verified Mentor (L4)' : 'Verified Peer Helper (L3)')
+                        : 'Learner Track'}
                     </span>
                   </div>
                   <p className="text-[11px] text-muted">
-                    Pedagogy Score: {teachingEvaluation?.average || 85}% • Spoken Clarity verified.
+                    {teachingEvaluation?.passed
+                      ? `Combined: ${teachingEvaluation.combinedScore}% (Written: ${teachingEvaluation.writtenScore}%, Voice: ${teachingEvaluation.voiceScore}%) • Verified`
+                      : teachingEvaluation
+                      ? `Score: ${teachingEvaluation.combinedScore}% (Below 60% threshold) • You can re-verify after roadmap completion.`
+                      : 'Not submitted yet • You can qualify for teaching by completing roadmap milestones.'}
                   </p>
                 </div>
               </div>

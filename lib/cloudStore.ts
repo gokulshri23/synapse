@@ -280,6 +280,25 @@ interface CloudStoreData {
   session_summaries: SessionSummaryRecord[];
   teaching_stats: Record<string, TeachingStats>;
   calls?: Record<string, CloudCallRecord>;
+  teaching_assessments?: Record<string, TeachingAssessmentRecord[]>;
+}
+
+export interface TeachingAssessmentRecord {
+  id: string;
+  user_id: string;
+  skill: string;
+  topic: string;
+  question: string;
+  written_answer: string;
+  written_score: number;
+  voice_transcript: string;
+  voice_score: number;
+  combined_score: number;
+  proficiency_level: number;
+  teaching_eligible: boolean;
+  knowledge_gaps: string[];
+  feedback: string;
+  created_at: string;
 }
 
 export interface CloudCallRecord {
@@ -353,6 +372,7 @@ function loadStore(): CloudStoreData {
         session_summaries: Array.isArray(parsed.session_summaries) ? parsed.session_summaries : [],
         teaching_stats: parsed.teaching_stats || {},
         calls: parsed.calls || {},
+        teaching_assessments: parsed.teaching_assessments || {},
         signaling: parsed.signaling || {},
       };
       return global.__synapse_cloud_cache;
@@ -399,6 +419,7 @@ function loadStore(): CloudStoreData {
     session_summaries: [],
     teaching_stats: {},
     calls: {},
+    teaching_assessments: {},
   };
 
   global.__synapse_cloud_cache = initial;
@@ -595,14 +616,23 @@ export function getActivePeers(excludeEmail?: string): CloudPeer[] {
     .filter((p) => p.onboarding_complete !== false)
     .filter((p) => !normExclude || p.email.toLowerCase() !== normExclude)
     .map((p) => {
-      const prof = store.profiles[p.email.toLowerCase()];
-      const vLevel = getVerifiedLevel(p.email, p.domain);
+      const emailLower = p.email.toLowerCase();
+      const prof = store.profiles[emailLower];
+      const verifiedSkills = getVerifiedTeachingSkills(emailLower);
+      const vLevel = getVerifiedLevel(emailLower, p.domain);
+
+      // Strict verified teaching integration: only verified skills can be offered!
+      const rawOffers = (prof?.canTeach && prof.canTeach.length > 0) ? prof.canTeach : (p.offers || []);
+      const verifiedOffers = rawOffers.filter((skill) =>
+        verifiedSkills.includes(skill) || verifiedSkills.map((s) => s.toLowerCase()).includes(skill.toLowerCase())
+      );
+
       return {
         ...p,
-        offers: (prof?.canTeach && prof.canTeach.length > 0) ? prof.canTeach : p.offers,
+        offers: verifiedOffers,
         needs: (prof?.seekingGuidance && prof.seekingGuidance.length > 0) ? prof.seekingGuidance : p.needs,
         verified_level: vLevel,
-        verified: vLevel !== null && vLevel > 0,
+        verified: (vLevel !== null && vLevel >= 3) || verifiedOffers.length > 0,
       };
     });
 }
@@ -613,14 +643,19 @@ export function updatePeerHeartbeat(peer: Partial<CloudPeer> & { email: string; 
   const existing = store.peers[normalized];
   const userProfile = store.profiles[normalized];
   const track = peer.domain || existing?.domain || userProfile?.domain || 'React';
+  const verifiedSkills = getVerifiedTeachingSkills(normalized);
 
-  const effectiveOffers = (peer.offers && peer.offers.length > 0)
+  const rawOffers = (peer.offers && peer.offers.length > 0)
     ? peer.offers
     : (userProfile?.canTeach && userProfile.canTeach.length > 0)
     ? userProfile.canTeach
     : (existing?.offers && existing.offers.length > 0)
     ? existing.offers
-    : [(track === 'React' ? 'Python' : 'React'), 'Problem Solving'];
+    : [];
+
+  const effectiveOffers = rawOffers.filter((skill) =>
+    verifiedSkills.includes(skill) || verifiedSkills.map((s) => s.toLowerCase()).includes(skill.toLowerCase())
+  );
 
   const effectiveNeeds = (peer.needs && peer.needs.length > 0)
     ? peer.needs
@@ -1167,6 +1202,15 @@ export function getVerifiedLevel(userId: string, skill: string): number | null {
       d.status === 'verified'
   );
   return verified ? verified.verified_level : null;
+}
+
+export function getVerifiedTeachingSkills(userId: string): string[] {
+  const store = loadStore();
+  const norm = (userId || '').trim().toLowerCase();
+  const decls = store.skill_declarations[norm] || [];
+  return decls
+    .filter((d) => d.intent === 'teach' && d.status === 'verified' && d.verified_level >= 3)
+    .map((d) => d.skill);
 }
 
 export function canRetakeQuiz(userId: string, skill: string): { allowed: boolean; hoursRemaining: number } {
@@ -2765,4 +2809,94 @@ export function updateCallStatus(callId: string, status: CloudCallRecord['status
 export function getCallRecord(callId: string): CloudCallRecord | null {
   const store = loadStore();
   return store.calls?.[callId] || null;
+}
+
+export function saveTeachingAssessment(assessment: TeachingAssessmentRecord): TeachingAssessmentRecord {
+  const store = loadStore();
+  const normUser = (assessment.user_id || '').trim().toLowerCase();
+  if (!store.teaching_assessments) {
+    store.teaching_assessments = {};
+  }
+  if (!store.teaching_assessments[normUser]) {
+    store.teaching_assessments[normUser] = [];
+  }
+  store.teaching_assessments[normUser].unshift(assessment);
+
+  // Sync skill declaration
+  if (!store.skill_declarations[normUser]) {
+    store.skill_declarations[normUser] = [];
+  }
+  const normSkill = assessment.skill.trim();
+  const existingDecl = store.skill_declarations[normUser].find(
+    (d) => d.skill.toLowerCase() === normSkill.toLowerCase() && d.intent === 'teach'
+  );
+
+  const status = assessment.teaching_eligible ? 'verified' : 'rejected';
+  const verified_level = assessment.proficiency_level;
+
+  if (existingDecl) {
+    existingDecl.status = status;
+    existingDecl.verified_level = verified_level;
+    existingDecl.quiz_score = assessment.combined_score;
+    existingDecl.evidence_url = assessment.written_answer.slice(0, 300);
+    existingDecl.last_attempt_at = assessment.created_at;
+    existingDecl.attempt_count = (existingDecl.attempt_count || 0) + 1;
+  } else {
+    store.skill_declarations[normUser].push({
+      id: 'sd_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+      user_id: normUser,
+      skill: normSkill,
+      intent: 'teach',
+      status,
+      verified_level,
+      quiz_score: assessment.combined_score,
+      attempt_count: 1,
+      evidence_url: assessment.written_answer.slice(0, 300),
+      last_attempt_at: assessment.created_at,
+      created_at: assessment.created_at,
+    });
+  }
+
+  // Synchronize profile canTeach & peer offers
+  if (store.profiles[normUser]) {
+    const prof = store.profiles[normUser];
+    const currentTeach = new Set(prof.canTeach || []);
+    if (assessment.teaching_eligible) {
+      currentTeach.add(normSkill);
+    } else {
+      currentTeach.delete(normSkill);
+    }
+    prof.canTeach = Array.from(currentTeach);
+    prof.offers = prof.canTeach;
+  }
+
+  if (store.peers[normUser]) {
+    const peer = store.peers[normUser];
+    const currentOffers = new Set(peer.offers || []);
+    if (assessment.teaching_eligible) {
+      currentOffers.add(normSkill);
+      peer.verified = true;
+      peer.verified_level = verified_level;
+    } else {
+      currentOffers.delete(normSkill);
+      if (currentOffers.size === 0) {
+        peer.verified = false;
+        peer.verified_level = 0;
+      }
+    }
+    peer.offers = Array.from(currentOffers);
+  }
+
+  saveStore(store);
+  return assessment;
+}
+
+export function getLatestTeachingAssessment(userId: string, skill?: string): TeachingAssessmentRecord | null {
+  const store = loadStore();
+  const normUser = (userId || '').trim().toLowerCase();
+  const assessments = store.teaching_assessments?.[normUser] || [];
+  if (skill) {
+    return assessments.find((a) => a.skill.toLowerCase() === skill.toLowerCase()) || null;
+  }
+  return assessments[0] || null;
 }

@@ -671,6 +671,32 @@ EXCEPTION WHEN OTHERS THEN
   NULL;
 END $$;
 
+-- =========================================================================
+-- Teaching Verification Assessments (Written + Spoken Realtime Verification)
+-- =========================================================================
+CREATE TABLE IF NOT EXISTS public.teaching_assessments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id TEXT NOT NULL,
+  skill TEXT NOT NULL,
+  topic TEXT,
+  question TEXT NOT NULL,
+  written_answer TEXT,
+  written_score NUMERIC DEFAULT 0,
+  voice_transcript TEXT,
+  voice_score NUMERIC DEFAULT 0,
+  combined_score NUMERIC DEFAULT 0,
+  proficiency_level INTEGER DEFAULT 1,
+  teaching_eligible BOOLEAN DEFAULT FALSE,
+  knowledge_gaps JSONB DEFAULT '[]'::jsonb,
+  feedback TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+ALTER TABLE public.teaching_assessments ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow authenticated read and insert on teaching_assessments" ON public.teaching_assessments FOR ALL TO authenticated USING (true);
+CREATE POLICY "Allow anon read and insert on teaching_assessments" ON public.teaching_assessments FOR ALL TO anon USING (true);
+
+
 
 
 

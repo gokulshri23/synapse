@@ -38,7 +38,7 @@ export default function MatchPage() {
   const [isDemo, setIsDemo] = useState(false);
 
   // Peer Exchange Profile State (Powers Connection Section)
-  const [canTeach, setCanTeach] = useState<string[]>(['React', 'Problem Solving']);
+  const [canTeach, setCanTeach] = useState<string[]>([]);
   const [seekingGuidance, setSeekingGuidance] = useState<string[]>(['Python', 'Algorithms']);
   const [isEditingSkills, setIsEditingSkills] = useState(false);
   const [draftCanTeach, setDraftCanTeach] = useState<string[]>([]);
@@ -133,10 +133,7 @@ export default function MatchPage() {
       const cachedName = localStorage.getItem('synapse_user_name');
       if (cachedName) currentName = cachedName;
 
-      // Sensible defaults: seek currentDomain (the learning goal), teach complementary
-      if (currentTeach.length === 0) {
-        currentTeach = [currentDomain === 'React' ? 'Python' : 'React', 'Problem Solving'];
-      }
+      // Seek currentDomain (the learning goal); only teach verified skills
       if (currentSeek.length === 0) {
         currentSeek = [currentDomain];
       }
@@ -295,7 +292,7 @@ export default function MatchPage() {
         dbProfiles.forEach((p: any) => {
           if (!discoveredPeers.some((dp) => dp.email?.toLowerCase() === p.email?.toLowerCase())) {
             let track = 'React';
-            let peerOffers = ['Python', 'Problem Solving'];
+            let peerOffers: string[] = [];
             let peerNeeds = ['React'];
 
             if (typeof p.learning_goal === 'string' && p.learning_goal.startsWith('SYNAPSE_META::')) {
@@ -317,7 +314,6 @@ export default function MatchPage() {
               else if (raw.includes('devops')) track = 'DevOps';
               else track = p.learning_goal;
 
-              peerOffers = [(track === 'React' ? 'Python' : 'React'), 'Problem Solving'];
               peerNeeds = [track];
             }
 
@@ -400,7 +396,7 @@ export default function MatchPage() {
       level: lvl,
       verified_level: userVerifiedLevel,
       weakTopics: userWeakTopics,
-      offers: activeOffers.length > 0 ? activeOffers : [(currentDomain === 'React' ? 'Python' : 'React'), 'Problem Solving'],
+      offers: activeOffers,
       needs: activeNeeds.length > 0 ? activeNeeds : [currentDomain],
     };
 
@@ -423,7 +419,7 @@ export default function MatchPage() {
   };
 
   const handleSaveSkillPreferences = async () => {
-    const updatedTeach = draftCanTeach.length > 0 ? draftCanTeach : [(domain === 'React' ? 'Python' : 'React'), 'Problem Solving'];
+    const updatedTeach = draftCanTeach;
     const updatedSeek = draftSeeking.length > 0 ? draftSeeking : [domain];
 
     setCanTeach(updatedTeach);
